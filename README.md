@@ -21,11 +21,7 @@ http://<pc-lan-ip>:9181/
 - Windows x64 installer and portable release packages.
 - No external service, account, or cloud dependency.
 
-## Demo
-
-<video width="640" height="260" controls>
-  <source src="docs/demo.mp4" type="video/mp4">
-</video>
+<video src="demo.mp4" controls autoplay muted loop></video>
 
 ## Install
 
