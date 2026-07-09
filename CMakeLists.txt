@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28...3.30)
 
-project(obs-lan-preview VERSION 0.1.3 LANGUAGES CXX)
+project(obs-lan-preview VERSION 0.1.4 LANGUAGES CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "obs-lan-preview v1 is Windows-only.")
@@ -60,6 +60,7 @@ install(TARGETS ${PROJECT_NAME}
 install(FILES README.md
   DESTINATION "data/obs-plugins/obs-lan-preview"
 )
+
 
 
 
