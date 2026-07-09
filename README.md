@@ -37,7 +37,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 Configure and build:
 
 ```powershell
-"C:\Program Files\CMake\bin\cmake.exe" --preset windows-x64 `
+& "C:\Program Files\CMake\bin\cmake.exe" --preset windows-x64 `
   "-DCMAKE_PREFIX_PATH=C:/obs-dev/obs-prefix;C:/obs-dev/obs-studio-32.1.2/.deps/obs-deps-2025-08-23-x64;C:/obs-dev/obs-studio-32.1.2/.deps/obs-deps-qt6-2025-08-23-x64"
 
 cmake --build --preset windows-x64-release
@@ -49,7 +49,7 @@ The plugin binary is `obs-lan-preview.dll`.
 Build the installer with Inno Setup after `cmake --install`:
 
 ```powershell
-iscc installer\obs-lan-preview.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\obs-lan-preview.iss
 ```
 
 The installer is written to `release\installer`.
