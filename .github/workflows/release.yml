@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and upload assets for"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,17 +17,46 @@ permissions:
 jobs:
   windows:
     name: Windows x64
-    runs-on: windows-latest
+    runs-on: windows-2022
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      - name: Install tools
+      - name: Verify Visual Studio 2022
         shell: pwsh
         run: |
-          winget install --id Kitware.CMake --exact --accept-package-agreements --accept-source-agreements --silent
-          winget install --id JRSoftware.InnoSetup --exact --accept-package-agreements --accept-source-agreements --silent
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe was not found on the runner."
+          }
+
+          $vsPath = & $vswhere -latest -products * -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio 2022 with MSVC x64 tools was not found on the runner."
+          }
+
+          Write-Host "Using Visual Studio 2022 at: $vsPath"
+          cmake --version
+
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $iscc = @(
+              "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+              "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+
+          if (-not $iscc) {
+            throw "ISCC.exe was not found on the runner."
+          }
+
+          Write-Host "Using Inno Setup compiler at: $iscc"
 
       - name: Checkout OBS Studio
         shell: pwsh
@@ -44,6 +79,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             release/packages/obs-preview-plugin.windows-x64-installer.zip
             release/packages/obs-preview-plugin.windows-x64-portable.zip
