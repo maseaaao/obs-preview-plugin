@@ -54,6 +54,53 @@ iscc installer\obs-lan-preview.iss
 
 The installer is written to `release\installer`.
 
+Build both release zip assets:
+
+```powershell
+.\scripts\package-windows.ps1
+```
+
+This creates:
+
+```text
+release\packages\obs-preview-plugin.windows-x64-installer.zip
+release\packages\obs-preview-plugin.windows-x64-portable.zip
+```
+
+## Versioning and Releases
+
+Use SemVer bumps:
+
+```powershell
+.\scripts\bump-version.ps1 patch
+.\scripts\bump-version.ps1 minor
+.\scripts\bump-version.ps1 major
+```
+
+The bump script updates `VERSION`, `CMakeLists.txt`, and the Inno Setup script,
+then creates a commit and tag like `v0.1.1`.
+
+Push the tag to trigger GitHub Releases:
+
+```powershell
+git push
+git push --tags
+```
+
+The GitHub Actions release workflow uploads:
+
+```text
+obs-preview-plugin.windows-x64-installer.zip
+obs-preview-plugin.windows-x64-portable.zip
+```
+
+For manual publishing with GitHub CLI:
+
+```powershell
+.\scripts\package-windows.ps1
+.\scripts\publish-github-release.ps1
+```
+
 ## OBS Development Prefix
 
 The regular OBS Studio installation usually does not include `libobsConfig.cmake`.

@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        shell: pwsh
+        run: |
+          winget install --id Kitware.CMake --exact --accept-package-agreements --accept-source-agreements --silent
+          winget install --id JRSoftware.InnoSetup --exact --accept-package-agreements --accept-source-agreements --silent
+
+      - name: Checkout OBS Studio
+        shell: pwsh
+        run: |
+          git clone --recursive --branch 32.1.2 https://github.com/obsproject/obs-studio.git C:\obs-dev\obs-studio-32.1.2
+
+      - name: Build OBS development prefix
+        shell: pwsh
+        run: |
+          cd C:\obs-dev\obs-studio-32.1.2
+          cmake --preset windows-x64 -DCMAKE_INSTALL_PREFIX=C:/obs-dev/obs-prefix
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target libobs obs-frontend-api
+          cmake --install build_x64 --prefix C:\obs-dev\obs-prefix --config RelWithDebInfo --component Development
+
+      - name: Package plugin
+        shell: pwsh
+        run: |
+          .\scripts\package-windows.ps1
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/packages/obs-preview-plugin.windows-x64-installer.zip
+            release/packages/obs-preview-plugin.windows-x64-portable.zip
