@@ -1,5 +1,5 @@
 #define PluginName "OBS LAN Preview"
-#define PluginVersion "0.1.5"
+#define PluginVersion "0.1.6"
 #define PluginDll "..\release\windows-x64\obs-plugins\64bit\obs-lan-preview.dll"
 
 [Setup]
@@ -53,6 +53,7 @@ begin
 
   Result := ExpandConstant('{autopf}\obs-studio');
 end;
+
 
 
 
