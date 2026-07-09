@@ -171,3 +171,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), [S
 ## License
 
 Distributed under the [MIT License](LICENSE).
+
+## Links
+
+[OBS Forum](https://obsproject.com/forum/resources/lan-preview-for-obs-studio.2590/)
