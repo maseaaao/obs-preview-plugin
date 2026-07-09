@@ -21,7 +21,7 @@ http://<pc-lan-ip>:9181/
 - Windows x64 installer and portable release packages.
 - No external service, account, or cloud dependency.
 
-### [Demo](docs/demo.gif)
+### [Demo](demo.mp4)
 
 ## Install
 
