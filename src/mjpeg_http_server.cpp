@@ -309,7 +309,7 @@ void MjpegHttpServer::handleIndex(SOCKET client)
 	const std::string body =
 		"<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
 		"<title>OBS LAN Preview</title><style>body{margin:0;background:#111;color:#eee;font:14px system-ui}"
-		"main{min-height:100vh;display:grid;place-items:center}img{max-width:100vw;max-height:100vh;width:auto;height:100%}</style></head>"
+		"main{min-height:100vh;display:grid;place-items:center}img{display:block;width:100vw;height:100vh;object-fit:contain;object-position:center}</style></head>"
 		"<body><main><img src=\"/preview.mjpg\" alt=\"OBS LAN Preview\"></main></body></html>";
 	sendAll(client, httpHeader(200, "text/html; charset=utf-8", body.size()));
 	sendAll(client, body);
