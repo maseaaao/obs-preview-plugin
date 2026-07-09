@@ -61,6 +61,8 @@ install(FILES README.md
   DESTINATION "data/obs-plugins/obs-lan-preview"
 )
 
-
+install(FILES LICENSE
+  DESTINATION "data/obs-plugins/obs-lan-preview"
+)
 
 

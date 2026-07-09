@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/maseaaao/obs-preview-plugin/security
+    about: Please avoid posting sensitive security details in public issues.

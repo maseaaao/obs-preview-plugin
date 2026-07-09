@@ -10,6 +10,7 @@ AppPublisher=obs-lan-preview
 DefaultDirName={code:GetObsStudioDir}
 DirExistsWarning=no
 DisableProgramGroupPage=yes
+LicenseFile=..\LICENSE
 OutputBaseFilename=obs-lan-preview-{#PluginVersion}-windows-x64-installer
 OutputDir=..\release\installer
 ArchitecturesAllowed=x64compatible
@@ -25,6 +26,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#PluginDll}"; DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}\data\obs-plugins\obs-lan-preview"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}\data\obs-plugins\obs-lan-preview"; Flags: ignoreversion
 
 [Code]
 function GetObsStudioDir(Param: String): String;

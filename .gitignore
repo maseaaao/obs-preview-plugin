@@ -1,8 +1,48 @@
+# Build output
 build/
-release/
-.vs/
 out/
+release/
+install/
+
+# CMake
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+Testing/
+compile_commands.json
+install_manifest.txt
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
 *.user
 *.suo
+*.opendb
+*.VC.db
+
+# Windows binaries and packages
+*.dll
+*.exe
 *.pdb
 *.ilk
+*.lib
+*.exp
+*.msi
+*.zip
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Local environment
+.env
+.env.*
+!.env.example
