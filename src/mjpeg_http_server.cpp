@@ -5,6 +5,7 @@
 #include <WS2tcpip.h>
 
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 #include <utility>
 
@@ -27,6 +28,28 @@ public:
 
 private:
 	bool ok_ = false;
+};
+
+class AtomicCounterGuard {
+public:
+	explicit AtomicCounterGuard(std::atomic_int &counter) : counter_(counter) { counter_.fetch_add(1); }
+	~AtomicCounterGuard() { counter_.fetch_sub(1); }
+
+private:
+	std::atomic_int &counter_;
+};
+
+class ThreadDoneGuard {
+public:
+	explicit ThreadDoneGuard(std::shared_ptr<std::atomic_bool> done) : done_(std::move(done)) {}
+	~ThreadDoneGuard()
+	{
+		if (done_)
+			done_->store(true);
+	}
+
+private:
+	std::shared_ptr<std::atomic_bool> done_;
 };
 
 std::string statusText(int status)
@@ -75,6 +98,31 @@ bool MjpegHttpServer::start(const PreviewSettings &settings)
 
 	settings_ = SettingsStore::clamp(settings);
 	setLastError({});
+	clients_.store(0);
+	streamClients_.store(0);
+	snapshotWaiters_.store(0);
+	frameDemandActive_.store(false);
+	pendingRawReady_.store(false);
+	submittedFrames_.store(0);
+	encodedFrames_.store(0);
+	droppedFrames_.store(0);
+	rawBuffersAllocated_.store(0);
+	rawBuffersReused_.store(0);
+	encodeTimeUs_.store(0);
+	maxEncodeTimeUs_.store(0);
+
+	{
+		std::lock_guard lock(mutex_);
+		pendingRaw_.reset();
+		latestJpeg_.reset();
+		rawBufferPool_.clear();
+		rawBufferPool_.reserve(2);
+		generation_ = 0;
+	}
+	{
+		std::lock_guard lock(clientThreadsMutex_);
+		clientThreads_.reserve(static_cast<size_t>(settings_.maxClients));
+	}
 	running_.store(true);
 
 	listenSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -134,18 +182,23 @@ void MjpegHttpServer::stop()
 		encoderThread_.join();
 
 	std::lock_guard lock(clientThreadsMutex_);
-	for (auto &thread : clientThreads_) {
-		if (thread.joinable())
-			thread.join();
+	for (auto &clientThread : clientThreads_) {
+		if (clientThread.thread.joinable())
+			clientThread.thread.join();
 	}
 	clientThreads_.clear();
 
 	{
 		std::lock_guard stateLock(mutex_);
 		pendingRaw_.reset();
-		latestJpeg_.clear();
+		latestJpeg_.reset();
+		rawBufferPool_.clear();
 		generation_ = 0;
 	}
+	pendingRawReady_.store(false);
+	streamClients_.store(0);
+	snapshotWaiters_.store(0);
+	frameDemandActive_.store(false);
 }
 
 bool MjpegHttpServer::running() const
@@ -153,14 +206,55 @@ bool MjpegHttpServer::running() const
 	return running_.load();
 }
 
-void MjpegHttpServer::submitFrame(RawFrame &&frame)
+void MjpegHttpServer::setFrameDemandCallback(FrameDemandCallback callback)
+{
+	std::lock_guard lock(demandCallbackMutex_);
+	frameDemandCallback_ = std::move(callback);
+}
+
+bool MjpegHttpServer::shouldCaptureFrame()
 {
 	if (!running_.load())
+		return false;
+	if (streamClients_.load() <= 0 && snapshotWaiters_.load() <= 0)
+		return false;
+	if (pendingRawReady_.load()) {
+		droppedFrames_.fetch_add(1);
+		return false;
+	}
+	return true;
+}
+
+std::vector<uint8_t> MjpegHttpServer::takeRawBuffer(size_t size)
+{
+	std::lock_guard lock(mutex_);
+	for (auto it = rawBufferPool_.begin(); it != rawBufferPool_.end(); ++it) {
+		if (it->capacity() >= size) {
+			std::vector<uint8_t> buffer = std::move(*it);
+			rawBufferPool_.erase(it);
+			rawBuffersReused_.fetch_add(1);
+			return buffer;
+		}
+	}
+
+	rawBuffersAllocated_.fetch_add(1);
+	return std::vector<uint8_t>();
+}
+
+void MjpegHttpServer::submitFrame(RawFrame &&frame)
+{
+	if (!running_.load() || (streamClients_.load() <= 0 && snapshotWaiters_.load() <= 0))
 		return;
 
 	{
 		std::lock_guard lock(mutex_);
+		if (pendingRaw_) {
+			droppedFrames_.fetch_add(1);
+			return;
+		}
 		pendingRaw_ = std::move(frame);
+		pendingRawReady_.store(true);
+		submittedFrames_.fetch_add(1);
 	}
 	rawCv_.notify_one();
 }
@@ -242,24 +336,45 @@ void MjpegHttpServer::acceptLoop()
 		setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeoutMs), sizeof(timeoutMs));
 		setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&timeoutMs), sizeof(timeoutMs));
 
+		char buffer[4096] = {};
+		const int received = recv(client, buffer, sizeof(buffer) - 1, 0);
+		if (received <= 0) {
+			closesocket(client);
+			continue;
+		}
+
+		const auto path = parsePath(std::string(buffer, buffer + received));
+		if (path == "/" || path == "/index.html") {
+			AtomicCounterGuard clientGuard(clients_);
+			handleIndex(client);
+			closesocket(client);
+			continue;
+		}
+		if (path == "/health") {
+			AtomicCounterGuard clientGuard(clients_);
+			handleHealth(client);
+			closesocket(client);
+			continue;
+		}
+		if (path != "/preview.mjpg" && path != "/snapshot.jpg") {
+			AtomicCounterGuard clientGuard(clients_);
+			handleNotFound(client);
+			closesocket(client);
+			continue;
+		}
+
+		reapClientThreads();
+		auto done = std::make_shared<std::atomic_bool>(false);
 		std::lock_guard lock(clientThreadsMutex_);
-		clientThreads_.emplace_back(&MjpegHttpServer::clientLoop, this, client);
+		clientThreads_.push_back({std::thread(&MjpegHttpServer::clientLoop, this, client, path, done), done});
 	}
 }
 
-void MjpegHttpServer::clientLoop(SOCKET client)
+void MjpegHttpServer::clientLoop(SOCKET client, std::string path, std::shared_ptr<std::atomic_bool> done)
 {
-	clients_.fetch_add(1);
+	ThreadDoneGuard doneGuard(std::move(done));
+	AtomicCounterGuard clientGuard(clients_);
 
-	char buffer[4096] = {};
-	const int received = recv(client, buffer, sizeof(buffer) - 1, 0);
-	if (received <= 0) {
-		closesocket(client);
-		clients_.fetch_sub(1);
-		return;
-	}
-
-	const auto path = parsePath(std::string(buffer, buffer + received));
 	if (path == "/" || path == "/index.html")
 		handleIndex(client);
 	else if (path == "/preview.mjpg")
@@ -268,14 +383,10 @@ void MjpegHttpServer::clientLoop(SOCKET client)
 		handleSnapshot(client);
 	else if (path == "/health")
 		handleHealth(client);
-	else {
-		const std::string body = "Not found\n";
-		sendAll(client, httpHeader(404, "text/plain; charset=utf-8", body.size()));
-		sendAll(client, body);
-	}
+	else
+		handleNotFound(client);
 
 	closesocket(client);
-	clients_.fetch_sub(1);
 }
 
 void MjpegHttpServer::encoderLoop()
@@ -289,16 +400,38 @@ void MjpegHttpServer::encoderLoop()
 				break;
 			raw = std::move(*pendingRaw_);
 			pendingRaw_.reset();
+			pendingRawReady_.store(false);
 		}
 
-		auto jpeg = JpegEncoder::encodeRgba(raw.rgba.data(), raw.width, raw.height, raw.quality);
-		if (jpeg.empty())
+		if (streamClients_.load() <= 0 && snapshotWaiters_.load() <= 0) {
+			droppedFrames_.fetch_add(1);
+			recycleRawBuffer(std::move(raw.bgr));
 			continue;
+		}
 
+		const auto encodeStart = std::chrono::steady_clock::now();
+		auto encoded = JpegEncoder::encodeBgr(raw.bgr.data(), raw.width, raw.height, raw.quality);
+		const auto encodeUs = static_cast<uint64_t>(
+			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - encodeStart)
+				.count());
+		encodeTimeUs_.fetch_add(encodeUs);
+
+		auto previousMax = maxEncodeTimeUs_.load();
+		while (encodeUs > previousMax && !maxEncodeTimeUs_.compare_exchange_weak(previousMax, encodeUs)) {
+		}
+
+		if (encoded.empty()) {
+			recycleRawBuffer(std::move(raw.bgr));
+			continue;
+		}
+
+		JpegFrame jpeg = std::make_shared<std::vector<uint8_t>>(std::move(encoded));
+		recycleRawBuffer(std::move(raw.bgr));
 		{
 			std::lock_guard lock(mutex_);
 			latestJpeg_ = std::move(jpeg);
 			++generation_;
+			encodedFrames_.fetch_add(1);
 		}
 		frameCv_.notify_all();
 	}
@@ -317,82 +450,189 @@ void MjpegHttpServer::handleIndex(SOCKET client)
 
 void MjpegHttpServer::handleHealth(SOCKET client)
 {
+	const auto encodedFrames = encodedFrames_.load();
+	const auto totalEncodeUs = encodeTimeUs_.load();
+	size_t latestJpegBytes = 0;
+	{
+		std::lock_guard lock(mutex_);
+		if (latestJpeg_)
+			latestJpegBytes = latestJpeg_->size();
+	}
+
 	std::ostringstream body;
 	body << "{\"running\":" << (running_.load() ? "true" : "false") << ",\"fps\":" << settings_.fps
 	     << ",\"width\":" << settings_.width << ",\"height\":" << settings_.height
-	     << ",\"quality\":" << settings_.quality << ",\"clients\":" << clients_.load() << "}\n";
+	     << ",\"quality\":" << settings_.quality << ",\"clients\":" << clients_.load()
+	     << ",\"streamClients\":" << streamClients_.load() << ",\"snapshotWaiters\":" << snapshotWaiters_.load()
+	     << ",\"frameDemand\":" << (frameDemandActive_.load() ? "true" : "false")
+	     << ",\"submittedFrames\":" << submittedFrames_.load() << ",\"encodedFrames\":" << encodedFrames
+	     << ",\"droppedFrames\":" << droppedFrames_.load() << ",\"latestJpegBytes\":" << latestJpegBytes
+	     << ",\"rawBuffersAllocated\":" << rawBuffersAllocated_.load()
+	     << ",\"rawBuffersReused\":" << rawBuffersReused_.load()
+	     << ",\"avgEncodeMs\":"
+	     << (encodedFrames > 0 ? static_cast<double>(totalEncodeUs) / static_cast<double>(encodedFrames) / 1000.0
+				   : 0.0)
+	     << ",\"maxEncodeMs\":" << static_cast<double>(maxEncodeTimeUs_.load()) / 1000.0 << "}\n";
 
 	const auto text = body.str();
 	sendAll(client, httpHeader(200, "application/json", text.size()));
 	sendAll(client, text);
 }
 
+void MjpegHttpServer::handleNotFound(SOCKET client)
+{
+	const std::string body = "Not found\n";
+	sendAll(client, httpHeader(404, "text/plain; charset=utf-8", body.size()));
+	sendAll(client, body);
+}
+
 void MjpegHttpServer::handleSnapshot(SOCKET client)
 {
-	std::vector<uint8_t> jpeg;
+	JpegFrame jpeg;
+	uint64_t generation = 0;
 	{
 		std::lock_guard lock(mutex_);
 		jpeg = latestJpeg_;
+		generation = generation_;
 	}
 
-	if (jpeg.empty()) {
+	if (streamClients_.load() <= 0) {
+		setSnapshotWaiterActive(true);
+		JpegFrame freshJpeg;
+		uint64_t freshGeneration = generation;
+		const bool fresh = waitForJpeg(generation, freshJpeg, freshGeneration, 2000);
+		setSnapshotWaiterActive(false);
+		if (fresh)
+			jpeg = std::move(freshJpeg);
+	}
+
+	if (!jpeg || jpeg->empty()) {
 		const std::string body = "No frame is available yet\n";
 		sendAll(client, httpHeader(503, "text/plain; charset=utf-8", body.size()));
 		sendAll(client, body);
 		return;
 	}
 
-	sendAll(client, httpHeader(200, "image/jpeg", jpeg.size()));
-	sendAll(client, reinterpret_cast<const char *>(jpeg.data()), jpeg.size());
+	sendAll(client, httpHeader(200, "image/jpeg", jpeg->size()));
+	sendAll(client, reinterpret_cast<const char *>(jpeg->data()), jpeg->size());
 }
 
 void MjpegHttpServer::handlePreview(SOCKET client)
 {
+	setStreamClientActive(true);
 	const std::string header =
 		"HTTP/1.1 200 OK\r\n"
 		"Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n"
 		"Pragma: no-cache\r\n"
 		"Connection: close\r\n"
 		"Content-Type: multipart/x-mixed-replace; boundary=obs-lan-preview\r\n\r\n";
-	if (!sendAll(client, header))
+	if (!sendAll(client, header)) {
+		setStreamClientActive(false);
 		return;
+	}
 
 	uint64_t generation = 0;
 	while (running_.load()) {
-		std::vector<uint8_t> jpeg;
+		JpegFrame jpeg;
 		if (!waitForJpeg(generation, jpeg, generation))
 			break;
 
 		std::ostringstream part;
 		part << "--obs-lan-preview\r\n"
 		     << "Content-Type: image/jpeg\r\n"
-		     << "Content-Length: " << jpeg.size() << "\r\n\r\n";
+		     << "Content-Length: " << jpeg->size() << "\r\n\r\n";
 		if (!sendAll(client, part.str()))
 			break;
-		if (!sendAll(client, reinterpret_cast<const char *>(jpeg.data()), jpeg.size()))
+		if (!sendAll(client, reinterpret_cast<const char *>(jpeg->data()), jpeg->size()))
 			break;
 		if (!sendAll(client, "\r\n", 2))
 			break;
 	}
+	setStreamClientActive(false);
 }
 
-bool MjpegHttpServer::waitForJpeg(uint64_t previousGeneration, std::vector<uint8_t> &jpeg, uint64_t &generation)
+bool MjpegHttpServer::waitForJpeg(uint64_t previousGeneration, JpegFrame &jpeg, uint64_t &generation, int timeoutMs)
 {
 	std::unique_lock lock(mutex_);
-	frameCv_.wait(lock, [&]() { return !running_.load() || generation_ != previousGeneration; });
+	const auto ready = [&]() { return !running_.load() || generation_ != previousGeneration; };
+	if (timeoutMs > 0) {
+		if (!frameCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready))
+			return false;
+	} else {
+		frameCv_.wait(lock, ready);
+	}
 	if (!running_.load())
 		return false;
 
 	jpeg = latestJpeg_;
 	generation = generation_;
-	return !jpeg.empty();
+	return jpeg && !jpeg->empty();
+}
+
+void MjpegHttpServer::reapClientThreads()
+{
+	std::lock_guard lock(clientThreadsMutex_);
+	for (auto it = clientThreads_.begin(); it != clientThreads_.end();) {
+		if (it->done && it->done->load()) {
+			if (it->thread.joinable())
+				it->thread.join();
+			it = clientThreads_.erase(it);
+		} else {
+			++it;
+		}
+	}
+}
+
+void MjpegHttpServer::recycleRawBuffer(std::vector<uint8_t> &&buffer)
+{
+	if (buffer.empty())
+		return;
+
+	buffer.clear();
+	std::lock_guard lock(mutex_);
+	if (rawBufferPool_.size() < 2)
+		rawBufferPool_.push_back(std::move(buffer));
+}
+
+void MjpegHttpServer::setStreamClientActive(bool active)
+{
+	if (active)
+		streamClients_.fetch_add(1);
+	else
+		streamClients_.fetch_sub(1);
+	updateFrameDemand();
+}
+
+void MjpegHttpServer::setSnapshotWaiterActive(bool active)
+{
+	if (active)
+		snapshotWaiters_.fetch_add(1);
+	else
+		snapshotWaiters_.fetch_sub(1);
+	updateFrameDemand();
+}
+
+void MjpegHttpServer::updateFrameDemand()
+{
+	const bool needed = running_.load() && (streamClients_.load() > 0 || snapshotWaiters_.load() > 0);
+	if (frameDemandActive_.exchange(needed) == needed)
+		return;
+
+	FrameDemandCallback callback;
+	{
+		std::lock_guard lock(demandCallbackMutex_);
+		callback = frameDemandCallback_;
+	}
+	if (callback)
+		callback(needed);
 }
 
 bool MjpegHttpServer::sendAll(SOCKET socket, const char *data, size_t size)
 {
+	constexpr size_t sendChunkSize = 64 * 1024;
 	size_t sent = 0;
 	while (sent < size) {
-		const int chunk = send(socket, data + sent, static_cast<int>(std::min<size_t>(size - sent, 16 * 1024)), 0);
+		const int chunk = send(socket, data + sent, static_cast<int>(std::min<size_t>(size - sent, sendChunkSize)), 0);
 		if (chunk <= 0)
 			return false;
 		sent += static_cast<size_t>(chunk);

@@ -20,7 +20,7 @@ bool ObsFrameCapture::start(const PreviewSettings &settings)
 	}
 
 	conversion_ = {};
-	conversion_.format = VIDEO_FORMAT_RGBA;
+	conversion_.format = VIDEO_FORMAT_BGR3;
 	conversion_.width = static_cast<uint32_t>(settings_.width);
 	conversion_.height = static_cast<uint32_t>(settings_.height);
 	conversion_.range = VIDEO_RANGE_FULL;
@@ -56,6 +56,18 @@ void ObsFrameCapture::setFrameCallback(FrameCallback callback)
 	callback_ = std::move(callback);
 }
 
+void ObsFrameCapture::setShouldCaptureCallback(ShouldCaptureCallback callback)
+{
+	std::lock_guard lock(mutex_);
+	shouldCapture_ = std::move(callback);
+}
+
+void ObsFrameCapture::setBufferCallback(BufferCallback callback)
+{
+	std::lock_guard lock(mutex_);
+	bufferCallback_ = std::move(callback);
+}
+
 std::string ObsFrameCapture::lastError() const
 {
 	std::lock_guard lock(mutex_);
@@ -72,29 +84,43 @@ void ObsFrameCapture::handleRawVideo(video_data *frame)
 	if (!running_.load() || !frame || !frame->data[0])
 		return;
 
+	ShouldCaptureCallback shouldCapture;
+	{
+		std::lock_guard lock(mutex_);
+		shouldCapture = shouldCapture_;
+	}
+
+	if (shouldCapture && !shouldCapture())
+		return;
+
+	FrameCallback callback;
+	BufferCallback bufferCallback;
+	{
+		std::lock_guard lock(mutex_);
+		callback = callback_;
+		bufferCallback = bufferCallback_;
+	}
+	if (!callback)
+		return;
+
 	RawFrame raw;
 	raw.width = settings_.width;
 	raw.height = settings_.height;
 	raw.quality = settings_.quality;
 	raw.timestamp = frame->timestamp;
-	raw.rgba.resize(static_cast<size_t>(raw.width) * static_cast<size_t>(raw.height) * 4);
+	const auto frameBytes = static_cast<size_t>(raw.width) * static_cast<size_t>(raw.height) * 3;
+	raw.bgr = bufferCallback ? bufferCallback(frameBytes) : std::vector<uint8_t>();
+	raw.bgr.resize(frameBytes);
 
-	const auto rowBytes = static_cast<size_t>(raw.width) * 4;
+	const auto rowBytes = static_cast<size_t>(raw.width) * 3;
 	const auto sourceStride = static_cast<size_t>(frame->linesize[0]);
-	auto *dst = raw.rgba.data();
+	auto *dst = raw.bgr.data();
 	const auto *src = frame->data[0];
 
 	for (int y = 0; y < raw.height; ++y)
 		std::memcpy(dst + static_cast<size_t>(y) * rowBytes, src + static_cast<size_t>(y) * sourceStride, rowBytes);
 
-	FrameCallback callback;
-	{
-		std::lock_guard lock(mutex_);
-		callback = callback_;
-	}
-
-	if (callback)
-		callback(std::move(raw));
+	callback(std::move(raw));
 }
 
 uint32_t ObsFrameCapture::frameRateDivisor(int requestedFps)

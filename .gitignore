@@ -42,6 +42,9 @@ install_manifest.txt
 Thumbs.db
 Desktop.ini
 
+# Local performance captures
+measurements/
+
 # Local environment
 .env
 .env.*

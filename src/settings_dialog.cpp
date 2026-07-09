@@ -129,15 +129,24 @@ PreviewSettings SettingsDialog::collect() const
 	return SettingsStore::clamp(settings);
 }
 
+QString SettingsDialog::lanUrlForPort(int port)
+{
+	if (cachedUrlPort_ != port || cachedUrl_.isEmpty()) {
+		cachedUrlPort_ = port;
+		cachedUrl_ = QString::fromStdString(MjpegHttpServer::lanUrl(port));
+	}
+	return cachedUrl_;
+}
+
 void SettingsDialog::refreshStatus()
 {
 	const auto settings = collect();
 	if (server_.running()) {
 		status_->setText(QString("Running, %1 client(s)").arg(server_.clientCount()));
-		url_->setText(QString::fromStdString(MjpegHttpServer::lanUrl(settings.port)));
+		url_->setText(lanUrlForPort(settings.port));
 	} else {
 		const auto error = server_.lastError();
 		status_->setText(error.empty() ? "Stopped" : QString("Stopped: %1").arg(QString::fromStdString(error)));
-		url_->setText(QString::fromStdString(MjpegHttpServer::lanUrl(settings.port)));
+		url_->setText(lanUrlForPort(settings.port));
 	}
 }

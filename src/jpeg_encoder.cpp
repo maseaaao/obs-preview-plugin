@@ -30,6 +30,28 @@ private:
 	HRESULT hr_ = E_FAIL;
 };
 
+class WicFactory {
+public:
+	WicFactory()
+	{
+		CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory_));
+	}
+
+	~WicFactory()
+	{
+		if (factory_)
+			factory_->Release();
+	}
+
+	IWICImagingFactory *get() const
+	{
+		return factory_;
+	}
+
+private:
+	IWICImagingFactory *factory_ = nullptr;
+};
+
 template <typename T> void release(T *&ptr)
 {
 	if (ptr) {
@@ -39,18 +61,21 @@ template <typename T> void release(T *&ptr)
 }
 }
 
-std::vector<uint8_t> JpegEncoder::encodeRgba(const uint8_t *rgba, int width, int height, int quality)
+std::vector<uint8_t> JpegEncoder::encodeBgr(const uint8_t *bgr, int width, int height, int quality)
 {
-	if (!rgba || width <= 0 || height <= 0)
+	if (!bgr || width <= 0 || height <= 0)
 		return {};
 
 	thread_local ComInit com;
 	if (!com.ok())
 		return {};
 
-	IWICImagingFactory *factory = nullptr;
+	thread_local WicFactory factoryStore;
+	auto *factory = factoryStore.get();
+	if (!factory)
+		return {};
+
 	IWICBitmap *bitmap = nullptr;
-	IWICFormatConverter *converter = nullptr;
 	IStream *stream = nullptr;
 	IWICBitmapEncoder *encoder = nullptr;
 	IWICBitmapFrameEncode *frame = nullptr;
@@ -61,33 +86,13 @@ std::vector<uint8_t> JpegEncoder::encodeRgba(const uint8_t *rgba, int width, int
 		release(frame);
 		release(encoder);
 		release(stream);
-		release(converter);
 		release(bitmap);
-		release(factory);
 	};
 
-	HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-	if (FAILED(hr)) {
-		cleanup();
-		return {};
-	}
-
-	hr = factory->CreateBitmapFromMemory(static_cast<UINT>(width), static_cast<UINT>(height), GUID_WICPixelFormat32bppRGBA,
-					     static_cast<UINT>(width * 4), static_cast<UINT>(width * height * 4),
-					     const_cast<BYTE *>(rgba), &bitmap);
-	if (FAILED(hr)) {
-		cleanup();
-		return {};
-	}
-
-	hr = factory->CreateFormatConverter(&converter);
-	if (FAILED(hr)) {
-		cleanup();
-		return {};
-	}
-
-	hr = converter->Initialize(bitmap, GUID_WICPixelFormat24bppBGR, WICBitmapDitherTypeNone, nullptr, 0.0,
-				   WICBitmapPaletteTypeCustom);
+	HRESULT hr = factory->CreateBitmapFromMemory(static_cast<UINT>(width), static_cast<UINT>(height),
+						     GUID_WICPixelFormat24bppBGR, static_cast<UINT>(width * 3),
+						     static_cast<UINT>(width * height * 3), const_cast<BYTE *>(bgr),
+						     &bitmap);
 	if (FAILED(hr)) {
 		cleanup();
 		return {};
@@ -148,7 +153,7 @@ std::vector<uint8_t> JpegEncoder::encodeRgba(const uint8_t *rgba, int width, int
 		return {};
 	}
 
-	hr = frame->WriteSource(converter, nullptr);
+	hr = frame->WriteSource(bitmap, nullptr);
 	if (FAILED(hr)) {
 		cleanup();
 		return {};

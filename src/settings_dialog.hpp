@@ -19,6 +19,7 @@ public:
 
 private:
 	PreviewSettings collect() const;
+	QString lanUrlForPort(int port);
 	void refreshStatus();
 
 	const MjpegHttpServer &server_;
@@ -34,4 +35,6 @@ private:
 	QSpinBox *maxClients_ = nullptr;
 	QLabel *status_ = nullptr;
 	QLabel *url_ = nullptr;
+	int cachedUrlPort_ = 0;
+	QString cachedUrl_;
 };

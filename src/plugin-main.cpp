@@ -23,8 +23,35 @@ MjpegHttpServer server;
 std::mutex stateMutex;
 QPointer<SettingsDialog> dialog;
 
+void configureCaptureCallbacks()
+{
+	capture.setFrameCallback([](RawFrame &&frame) { server.submitFrame(std::move(frame)); });
+	capture.setShouldCaptureCallback([]() { return server.shouldCaptureFrame(); });
+	capture.setBufferCallback([](size_t size) { return server.takeRawBuffer(size); });
+}
+
+void handleFrameDemand(bool needed)
+{
+	std::lock_guard lock(stateMutex);
+	if (!currentSettings.enabled || !server.running())
+		return;
+
+	if (!needed) {
+		capture.stop();
+		return;
+	}
+
+	if (capture.running())
+		return;
+
+	configureCaptureCallbacks();
+	if (!capture.start(currentSettings))
+		server.setLastError(capture.lastError());
+}
+
 void stopPreview()
 {
+	server.setFrameDemandCallback({});
 	capture.stop();
 	server.stop();
 }
@@ -38,13 +65,10 @@ bool startPreview(const PreviewSettings &settings)
 		return true;
 	}
 
-	if (!server.start(settings))
-		return false;
-
-	capture.setFrameCallback([](RawFrame &&frame) { server.submitFrame(std::move(frame)); });
-	if (!capture.start(settings)) {
-		server.setLastError(capture.lastError());
-		server.stop();
+	configureCaptureCallbacks();
+	server.setFrameDemandCallback(handleFrameDemand);
+	if (!server.start(settings)) {
+		server.setFrameDemandCallback({});
 		return false;
 	}
 
@@ -53,10 +77,13 @@ bool startPreview(const PreviewSettings &settings)
 
 void applySettings(const PreviewSettings &settings)
 {
-	std::lock_guard lock(stateMutex);
-	currentSettings = SettingsStore::clamp(settings);
-	settingsStore.save(currentSettings);
-	startPreview(currentSettings);
+	const auto clamped = SettingsStore::clamp(settings);
+	{
+		std::lock_guard lock(stateMutex);
+		currentSettings = clamped;
+	}
+	settingsStore.save(clamped);
+	startPreview(clamped);
 }
 
 void showSettingsDialog(void *)

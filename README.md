@@ -13,6 +13,8 @@ Default preview URL:
 http://<pc-lan-ip>:9181/
 ```
 
+<img src="docs/logo.jpg" width="200" alt="Логотип">
+
 ## Highlights
 
 - Live Program preview in any browser on the same local network.
@@ -21,7 +23,7 @@ http://<pc-lan-ip>:9181/
 - Windows x64 installer and portable release packages.
 - No external service, account, or cloud dependency.
 
-### [Demo](demo.mp4)
+### [Demo](docs/demo.mp4)
 
 ## Install
 
@@ -51,6 +53,10 @@ Windows Firewall may ask whether OBS can accept local network connections. Allow
 - JPEG quality 70%
 - Bind address `0.0.0.0`
 - No password in v1
+
+## Performance Checks
+
+The plugin captures, JPEG-encodes, and serves frames over HTTP, so it does extra work beyond the built-in OBS preview. See [Performance Measurement](docs/performance-measurement.md) for the repeatable measurement script and comparison protocol.
 
 ## HTTP Endpoints
 

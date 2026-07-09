@@ -16,12 +16,14 @@ struct RawFrame {
 	int height = 0;
 	int quality = 70;
 	uint64_t timestamp = 0;
-	std::vector<uint8_t> rgba;
+	std::vector<uint8_t> bgr;
 };
 
 class ObsFrameCapture {
 public:
 	using FrameCallback = std::function<void(RawFrame &&frame)>;
+	using ShouldCaptureCallback = std::function<bool()>;
+	using BufferCallback = std::function<std::vector<uint8_t>(size_t size)>;
 
 	ObsFrameCapture() = default;
 	~ObsFrameCapture();
@@ -31,6 +33,8 @@ public:
 	bool running() const;
 
 	void setFrameCallback(FrameCallback callback);
+	void setShouldCaptureCallback(ShouldCaptureCallback callback);
+	void setBufferCallback(BufferCallback callback);
 	std::string lastError() const;
 
 private:
@@ -40,6 +44,8 @@ private:
 
 	mutable std::mutex mutex_;
 	FrameCallback callback_;
+	ShouldCaptureCallback shouldCapture_;
+	BufferCallback bufferCallback_;
 	std::string lastError_;
 	video_scale_info conversion_ = {};
 	PreviewSettings settings_;
