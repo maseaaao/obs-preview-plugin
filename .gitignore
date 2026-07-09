@@ -1,0 +1,8 @@
+build/
+release/
+.vs/
+out/
+*.user
+*.suo
+*.pdb
+*.ilk
