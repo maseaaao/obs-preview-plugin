@@ -21,6 +21,8 @@ http://<pc-lan-ip>:9181/
 - Windows x64 installer and portable release packages.
 - No external service, account, or cloud dependency.
 
+![Demo](./docs/demo.mp4)
+
 ## Install
 
 Download the latest Windows assets from the [Releases](https://github.com/maseaaao/obs-preview-plugin/releases) page.
