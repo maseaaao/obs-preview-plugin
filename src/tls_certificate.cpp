@@ -14,9 +14,11 @@
 #include <vector>
 
 namespace {
-constexpr wchar_t rootSubject[] = L"CN=OBS LAN Preview Local CA";
-constexpr wchar_t rootContainer[] = L"OBS LAN Preview Local CA";
-constexpr wchar_t rootFriendlyName[] = L"OBS LAN Preview Local CA (managed)";
+// v1 stored CERT_FRIENDLY_NAME_PROP_ID with an invalid pvData value.  Use new
+// identifiers so an existing malformed certificate is never read by CryptoAPI.
+constexpr wchar_t rootSubject[] = L"CN=OBS LAN Preview Local CA v2";
+constexpr wchar_t rootContainer[] = L"OBS LAN Preview Local CA v2";
+constexpr wchar_t rootFriendlyName[] = L"OBS LAN Preview Local CA v2 (managed)";
 
 std::wstring wide(const std::string &text)
 {
@@ -200,7 +202,13 @@ PCCERT_CONTEXT findRoot()
 
 bool storeRoot(PCCERT_CONTEXT certificate)
 {
-	if (!CertSetCertificateContextProperty(certificate, CERT_FRIENDLY_NAME_PROP_ID, 0, rootFriendlyName))
+	// CERT_FRIENDLY_NAME_PROP_ID takes a CRYPT_DATA_BLOB, not a raw wchar_t
+	// pointer.  Passing the latter makes CryptoAPI interpret UTF-16 code units
+	// as a length and pointer, which can crash inside crypt32.dll.
+	CRYPT_DATA_BLOB friendlyName = {};
+	friendlyName.cbData = sizeof(rootFriendlyName);
+	friendlyName.pbData = reinterpret_cast<BYTE *>(const_cast<wchar_t *>(rootFriendlyName));
+	if (!CertSetCertificateContextProperty(certificate, CERT_FRIENDLY_NAME_PROP_ID, 0, &friendlyName))
 		return false;
 	HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0, CERT_SYSTEM_STORE_CURRENT_USER, L"CA");
 	if (!store)
