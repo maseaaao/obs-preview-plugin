@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Verify Visual Studio 2022
         shell: pwsh
@@ -76,10 +77,16 @@ jobs:
         run: |
           .\scripts\package-windows.ps1
 
+      - name: Generate release notes
+        shell: pwsh
+        run: |
+          .\scripts\generate-release-notes.ps1 -Tag "${env:RELEASE_TAG}" -Repository "${{ github.repository }}" -OutputPath release\release-notes.md
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          body_path: release/release-notes.md
           files: |
             release/packages/obs-preview-plugin.windows-x64-installer.zip
             release/packages/obs-preview-plugin.windows-x64-portable.zip
