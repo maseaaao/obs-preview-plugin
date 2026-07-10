@@ -1,11 +1,11 @@
-# OBS LAN Preview Plugin
+# LAN Preview for OBS Studio
 
 [![Release](https://github.com/maseaaao/obs-preview-plugin/actions/workflows/release.yml/badge.svg)](https://github.com/maseaaao/obs-preview-plugin/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/maseaaao/obs-preview-plugin?sort=semver)](https://github.com/maseaaao/obs-preview-plugin/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL-2.0-or-later](https://img.shields.io/badge/License-GPL--2.0--or--later-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4.svg)](#build)
 
-Windows-first OBS Studio plugin that serves the current Program output to the local network as a live MJPEG preview.
+LAN Preview is an independent third-party plugin for OBS Studio. It serves the current Program output to the local network as a live MJPEG preview.
 
 Default preview URLs:
 
@@ -14,7 +14,9 @@ https://<pc-lan-ip>:9181/
 http://<pc-lan-ip>:9180/
 ```
 
-<img src="docs/logo.jpg" width="200" alt="Логотип">
+<img src="docs/logo.jpg" width="200" alt="Logo">
+
+<img src="docs/app.jpg" width="800" alt="App">
 
 ## Highlights
 
@@ -44,6 +46,8 @@ For the portable package, extract the archive into the OBS Studio installation d
 3. Go to `Tools -> LAN Preview`.
 4. Enable preview and apply settings.
 5. Open the shown HTTP URL for an immediate, unencrypted preview; or export the trusted-device certificate, install it on each phone/tablet, then open the HTTPS URL.
+
+After updating from a release before 0.2.1, export and trust the new LAN Preview certificate again before using HTTPS. The certificate identity was changed as part of the product rebrand.
 
 The certificate fingerprint displayed by the plugin lets you verify the file before trusting it. The plugin creates a stable local CA for this OBS user; it is not a public Internet certificate.
 
@@ -184,7 +188,9 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), [S
 
 ## License
 
-Distributed under the [MIT License](LICENSE).
+Copyright (C) 2026 maseaaao and maxxborer contributors.
+
+LAN Preview is free software: you can redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version.
 
 ## Links
 

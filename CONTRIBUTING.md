@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to improve OBS LAN Preview.
+Thanks for taking the time to improve LAN Preview.
 
 ## Good First Steps
 

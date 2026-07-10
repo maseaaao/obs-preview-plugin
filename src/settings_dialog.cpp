@@ -75,7 +75,7 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	connect(awakeUrl_, &QPushButton::clicked, this, [this]() { copyUrl(awakeUrl_->text(), "Stay-awake URL copied"); });
 	connect(httpUrl_, &QPushButton::clicked, this, [this]() { copyUrl(httpUrl_->text(), "HTTP preview URL copied"); });
 	connect(exportCertificate_, &QPushButton::clicked, this, [this]() {
-		const auto path = QFileDialog::getSaveFileName(this, "Export OBS LAN Preview CA", "obs-lan-preview-ca.pem",
+		const auto path = QFileDialog::getSaveFileName(this, "Export LAN Preview CA", "lan-preview-ca.pem",
 								       "Certificate (*.pem *.cer)");
 		if (path.isEmpty())
 			return;

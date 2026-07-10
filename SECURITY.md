@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes target the latest released version of OBS LAN Preview.
+Security fixes target the latest released version of LAN Preview.
 
 ## Reporting a Vulnerability
 

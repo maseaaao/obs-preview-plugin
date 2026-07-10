@@ -1,6 +1,6 @@
 # Code of Conduct
 
-This project aims to be a focused, practical, and welcoming place to improve OBS LAN Preview.
+This project aims to be a focused, practical, and welcoming place to improve LAN Preview.
 
 ## Expected Behavior
 

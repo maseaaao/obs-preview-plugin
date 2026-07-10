@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28...3.30)
 
-project(obs-lan-preview VERSION 0.2.0 LANGUAGES CXX)
+project(obs-lan-preview VERSION 0.2.1 LANGUAGES CXX)
 
 include(CTest)
 

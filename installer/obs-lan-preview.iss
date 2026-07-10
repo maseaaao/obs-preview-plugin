@@ -1,12 +1,12 @@
-#define PluginName "OBS LAN Preview"
-#define PluginVersion "0.2.0"
+#define PluginName "LAN Preview"
+#define PluginVersion "0.2.1"
 #define PluginDll "..\release\windows-x64\obs-plugins\64bit\obs-lan-preview.dll"
 
 [Setup]
 AppId={{9EBA14EA-27E6-4C2C-90B6-D1E2D94CB271}
 AppName={#PluginName}
 AppVersion={#PluginVersion}
-AppPublisher=obs-lan-preview
+AppPublisher=maseaaao
 DefaultDirName={code:GetObsStudioDir}
 DirExistsWarning=no
 DisableProgramGroupPage=yes

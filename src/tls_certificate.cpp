@@ -16,9 +16,9 @@
 namespace {
 // v1 stored CERT_FRIENDLY_NAME_PROP_ID with an invalid pvData value.  Use new
 // identifiers so an existing malformed certificate is never read by CryptoAPI.
-constexpr wchar_t rootSubject[] = L"CN=OBS LAN Preview Local CA v2";
-constexpr wchar_t rootContainer[] = L"OBS LAN Preview Local CA v2";
-constexpr wchar_t rootFriendlyName[] = L"OBS LAN Preview Local CA v2 (managed)";
+constexpr wchar_t rootSubject[] = L"CN=LAN Preview Local CA v2";
+constexpr wchar_t rootContainer[] = L"LAN Preview Local CA v2";
+constexpr wchar_t rootFriendlyName[] = L"LAN Preview Local CA v2 (managed)";
 
 std::wstring wide(const std::string &text)
 {
@@ -296,7 +296,7 @@ bool LocalCertificateAuthority::ensure(const std::string &hostname, const std::v
 		error = "Unable to create certificate subject alternative names.";
 		return false;
 	}
-	const auto leafContainer = std::wstring(L"OBS LAN Preview Server ") + host;
+	const auto leafContainer = std::wstring(L"LAN Preview Server ") + host;
 	auto *temporary = createSelfSigned(L"CN=" + host, leafContainer.c_str(), leafExtensions);
 	if (!temporary) {
 		error = "Unable to create the local TLS key: " + utf8(errorText(GetLastError()));

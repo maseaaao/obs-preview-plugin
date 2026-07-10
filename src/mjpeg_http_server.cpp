@@ -597,11 +597,11 @@ void MjpegHttpServer::handleIndex(HttpConnection &client, bool stayAwake, bool t
 	const std::string body =
 		"<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
 		"<meta name=\"theme-color\" content=\"#111111\"><meta name=\"apple-mobile-web-app-capable\" content=\"yes\">"
-		"<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black\">" + pwaHead + "<title>OBS LAN Preview</title>"
+		"<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black\">" + pwaHead + "<title>LAN Preview</title>"
 		"<style>body{margin:0;background:#111;color:#eee;font:14px system-ui}main{min-height:100vh;display:grid;place-items:center}"
 		"img{display:block;width:100vw;height:100vh;object-fit:contain;object-position:center}.status{position:fixed;left:12px;bottom:12px;"
 		"padding:6px 9px;border-radius:7px;background:#000a;font-size:12px}.status button{margin-left:6px}</style></head>"
-		"<body><main><img id=\"preview\" alt=\"OBS LAN Preview\"></main><div class=\"status\" id=\"status\" hidden></div>"
+		"<body><main><img id=\"preview\" alt=\"LAN Preview\"></main><div class=\"status\" id=\"status\" hidden></div>"
 		"<script>(()=>{const image=document.getElementById('preview'),status=document.getElementById('status');"
 		"const awake=new URLSearchParams(location.search).get('stay-awake')==='1';let lock=null,streaming=false;"
 		"function setStatus(text,retry){status.hidden=!text;status.textContent=text;if(retry){const b=document.createElement('button');b.textContent='Try again';b.onclick=()=>requestLock();status.append(b)}}"
@@ -620,9 +620,9 @@ void MjpegHttpServer::handleIndex(HttpConnection &client, bool stayAwake, bool t
 void MjpegHttpServer::handleManifest(HttpConnection &client, bool stayAwake)
 {
 	const std::string suffix = stayAwake ? "?stay-awake=1" : "";
-	const std::string name = stayAwake ? "OBS LAN Preview Awake" : "OBS LAN Preview";
+	const std::string name = stayAwake ? "LAN Preview Awake" : "LAN Preview";
 	const std::string body = "{\"id\":\"/" + suffix + "\",\"name\":\"" + name +
-		"\",\"short_name\":\"OBS Preview\",\"start_url\":\"/" + suffix +
+		"\",\"short_name\":\"LAN Preview\",\"start_url\":\"/" + suffix +
 		"\",\"display\":\"standalone\",\"background_color\":\"#111111\",\"theme_color\":\"#111111\","
 		"\"icons\":[{\"src\":\"/icon-192.png\",\"sizes\":\"192x192\",\"type\":\"image/png\",\"purpose\":\"any maskable\"},"
 		"{\"src\":\"/icon-512.png\",\"sizes\":\"512x512\",\"type\":\"image/png\",\"purpose\":\"any maskable\"}]}";
