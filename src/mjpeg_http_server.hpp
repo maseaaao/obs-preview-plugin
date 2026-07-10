@@ -2,6 +2,8 @@
 
 #include "frame_capture.hpp"
 #include "settings.hpp"
+#include "tls_certificate.hpp"
+#include "tls_connection.hpp"
 
 #include <WinSock2.h>
 
@@ -35,19 +37,24 @@ public:
 	std::string lastError() const;
 	void setLastError(std::string error);
 	PreviewSettings settings() const;
+	bool exportTrustedCertificate(const QString &path, QString &error) const;
+	QString certificateFingerprint() const;
 
 	static std::string lanUrl(int port);
 
 private:
 	void acceptLoop();
-	void clientLoop(SOCKET client, std::string path, std::shared_ptr<std::atomic_bool> done);
+	void clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool> done);
 	void encoderLoop();
 
-	void handleIndex(SOCKET client);
-	void handleHealth(SOCKET client);
-	void handleSnapshot(SOCKET client);
-	void handlePreview(SOCKET client);
-	void handleNotFound(SOCKET client);
+	void handleIndex(TlsConnection &client, bool stayAwake);
+	void handleManifest(TlsConnection &client, bool stayAwake);
+	void handleServiceWorker(TlsConnection &client);
+	void handleIcon(TlsConnection &client, int size);
+	void handleHealth(TlsConnection &client);
+	void handleSnapshot(TlsConnection &client);
+	void handlePreview(TlsConnection &client);
+	void handleNotFound(TlsConnection &client);
 
 	using JpegFrame = std::shared_ptr<const std::vector<uint8_t>>;
 
@@ -58,8 +65,8 @@ private:
 	void setSnapshotWaiterActive(bool active);
 	void updateFrameDemand();
 
-	static bool sendAll(SOCKET socket, const char *data, size_t size);
-	static bool sendAll(SOCKET socket, const std::string &data);
+	static bool sendAll(TlsConnection &socket, const char *data, size_t size);
+	static bool sendAll(TlsConnection &socket, const std::string &data);
 	static std::string parsePath(const std::string &request);
 
 	struct ClientThread {
@@ -81,6 +88,7 @@ private:
 	uint64_t generation_ = 0;
 
 	SOCKET listenSocket_ = INVALID_SOCKET;
+	LocalCertificateAuthority certificateAuthority_;
 	std::thread acceptThread_;
 	std::thread encoderThread_;
 	std::vector<ClientThread> clientThreads_;

@@ -41,6 +41,7 @@ private:
 	static void onRawVideo(void *param, video_data *frame);
 	void handleRawVideo(video_data *frame);
 	static uint32_t frameRateDivisor(int requestedFps);
+	bool acceptTimestamp(uint64_t timestamp);
 
 	mutable std::mutex mutex_;
 	FrameCallback callback_;
@@ -49,5 +50,8 @@ private:
 	std::string lastError_;
 	video_scale_info conversion_ = {};
 	PreviewSettings settings_;
+	uint64_t lastAcceptedTimestamp_ = 0;
+	bool hasAcceptedTimestamp_ = false;
+	uint64_t frameIntervalNs_ = 0;
 	std::atomic_bool running_{false};
 };

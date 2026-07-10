@@ -1,4 +1,5 @@
 #include "frame_capture.hpp"
+#include "capture_pacing.hpp"
 
 #include <cstring>
 #include <cmath>
@@ -25,6 +26,9 @@ bool ObsFrameCapture::start(const PreviewSettings &settings)
 	conversion_.height = static_cast<uint32_t>(settings_.height);
 	conversion_.range = VIDEO_RANGE_FULL;
 	conversion_.colorspace = VIDEO_CS_SRGB;
+	lastAcceptedTimestamp_ = 0;
+	hasAcceptedTimestamp_ = false;
+	frameIntervalNs_ = 1000000000ULL / static_cast<uint64_t>(settings_.fps);
 
 	if (!obs_get_video()) {
 		std::lock_guard lock(mutex_);
@@ -92,6 +96,8 @@ void ObsFrameCapture::handleRawVideo(video_data *frame)
 
 	if (shouldCapture && !shouldCapture())
 		return;
+	if (!acceptTimestamp(frame->timestamp))
+		return;
 
 	FrameCallback callback;
 	BufferCallback bufferCallback;
@@ -130,6 +136,11 @@ uint32_t ObsFrameCapture::frameRateDivisor(int requestedFps)
 		return 1;
 
 	const double obsFps = static_cast<double>(info.fps_num) / static_cast<double>(info.fps_den);
-	const auto divisor = static_cast<uint32_t>(std::max(1.0, std::round(obsFps / std::max(1, requestedFps))));
+	const auto divisor = static_cast<uint32_t>(std::max(1.0, std::floor(obsFps / std::max(1, requestedFps))));
 	return divisor;
+}
+
+bool ObsFrameCapture::acceptTimestamp(uint64_t timestamp)
+{
+	return acceptFrameTimestamp(lastAcceptedTimestamp_, hasAcceptedTimestamp_, frameIntervalNs_, timestamp);
 }

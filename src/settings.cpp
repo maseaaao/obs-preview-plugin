@@ -7,12 +7,8 @@
 #include <QJsonObject>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
-
-namespace {
-constexpr int minDimension = 64;
-constexpr int maxDimension = 4096;
-}
 
 void SettingsStore::setPath(QString path)
 {
@@ -36,9 +32,12 @@ PreviewSettings SettingsStore::load() const
 	settings.bindAddress = obj.value("bindAddress").toString(settings.bindAddress);
 	settings.port = obj.value("port").toInt(settings.port);
 	settings.fps = obj.value("fps").toInt(settings.fps);
-	settings.width = obj.value("width").toInt(settings.width);
-	settings.height = obj.value("height").toInt(settings.height);
-	settings.keepAspect = obj.value("keepAspect").toBool(settings.keepAspect);
+	if (obj.contains("resolutionScale")) {
+		settings.resolutionScale = obj.value("resolutionScale").toInt(settings.resolutionScale);
+	} else {
+		settings.legacyWidth = obj.value("width").toInt();
+		settings.legacyHeight = obj.value("height").toInt();
+	}
 	settings.quality = obj.value("quality").toInt(settings.quality);
 	settings.maxClients = obj.value("maxClients").toInt(settings.maxClients);
 
@@ -56,9 +55,7 @@ bool SettingsStore::save(const PreviewSettings &input) const
 	obj["bindAddress"] = settings.bindAddress;
 	obj["port"] = settings.port;
 	obj["fps"] = settings.fps;
-	obj["width"] = settings.width;
-	obj["height"] = settings.height;
-	obj["keepAspect"] = settings.keepAspect;
+	obj["resolutionScale"] = settings.resolutionScale;
 	obj["quality"] = settings.quality;
 	obj["maxClients"] = settings.maxClients;
 
@@ -73,9 +70,8 @@ bool SettingsStore::save(const PreviewSettings &input) const
 PreviewSettings SettingsStore::clamp(PreviewSettings settings)
 {
 	settings.port = std::clamp(settings.port, 1, 65535);
-	settings.fps = std::clamp(settings.fps, 1, 30);
-	settings.width = std::clamp(settings.width, minDimension, maxDimension);
-	settings.height = std::clamp(settings.height, minDimension, maxDimension);
+	settings.fps = normalizeFps(settings.fps);
+	settings.resolutionScale = normalizeResolutionScale(settings.resolutionScale);
 	settings.quality = std::clamp(settings.quality, 1, 100);
 	settings.maxClients = std::clamp(settings.maxClients, 1, 64);
 
@@ -83,4 +79,52 @@ PreviewSettings SettingsStore::clamp(PreviewSettings settings)
 		settings.bindAddress = "0.0.0.0";
 
 	return settings;
+}
+
+int SettingsStore::normalizeFps(int value)
+{
+	int normalized = frameRates.front();
+	for (const auto candidate : frameRates) {
+		if (candidate > value)
+			break;
+		normalized = candidate;
+	}
+	return normalized;
+}
+
+int SettingsStore::normalizeResolutionScale(int value)
+{
+	int normalized = resolutionScales.front();
+	for (const auto candidate : resolutionScales) {
+		if (candidate > value)
+			break;
+		normalized = candidate;
+	}
+	return normalized;
+}
+
+PreviewResolution SettingsStore::scaledResolution(int sourceWidth, int sourceHeight, int scalePercent)
+{
+	if (sourceWidth <= 0 || sourceHeight <= 0)
+		return {};
+
+	const auto scale = static_cast<double>(normalizeResolutionScale(scalePercent)) / 100.0;
+	int width = std::max(2, static_cast<int>(std::lround(static_cast<double>(sourceWidth) * scale)));
+	if (width > 2 && (width & 1))
+		--width;
+	int height = std::max(2, static_cast<int>(std::lround(static_cast<double>(width) * sourceHeight / sourceWidth)));
+	if (height > 2 && (height & 1))
+		--height;
+	return {width, height};
+}
+
+int SettingsStore::migrateResolutionScale(int legacyWidth, int legacyHeight, int sourceWidth, int sourceHeight)
+{
+	if (legacyWidth <= 0 || legacyHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0)
+		return 33;
+
+	const auto ratio = std::min(static_cast<double>(legacyWidth) / sourceWidth,
+				    static_cast<double>(legacyHeight) / sourceHeight) *
+			   100.0;
+	return normalizeResolutionScale(static_cast<int>(std::floor(ratio)));
 }

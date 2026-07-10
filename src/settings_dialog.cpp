@@ -1,19 +1,21 @@
 #include "settings_dialog.hpp"
 
 #include <QCheckBox>
+#include <QClipboard>
+#include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFormLayout>
-#include <QHBoxLayout>
+#include <QGuiApplication>
 #include <QLabel>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include <algorithm>
-#include <cmath>
-#include <memory>
 #include <utility>
+
+#include <obs.h>
 
 SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &server, ApplyCallback apply, QWidget *parent)
 	: QDialog(parent),
@@ -23,7 +25,7 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	settings = SettingsStore::clamp(settings);
 
 	setWindowTitle("LAN Preview");
-	resize(420, 280);
+	resize(520, 330);
 
 	enabled_ = new QCheckBox("Enable LAN preview", this);
 	enabled_->setChecked(settings.enabled);
@@ -32,23 +34,15 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	port_->setRange(1, 65535);
 	port_->setValue(settings.port);
 
-	fps_ = new QSpinBox(this);
-	fps_->setRange(1, 30);
-	fps_->setValue(settings.fps);
-	fps_->setSuffix(" FPS");
+	fps_ = new QComboBox(this);
+	for (const auto fps : SettingsStore::frameRates)
+		fps_->addItem(QString::number(fps) + " FPS", fps);
+	fps_->setCurrentIndex(fps_->findData(settings.fps));
 
-	width_ = new QSpinBox(this);
-	width_->setRange(64, 4096);
-	width_->setValue(settings.width);
-	width_->setSuffix(" px");
-
-	height_ = new QSpinBox(this);
-	height_->setRange(64, 4096);
-	height_->setValue(settings.height);
-	height_->setSuffix(" px");
-
-	keepAspect_ = new QCheckBox("Keep aspect ratio", this);
-	keepAspect_->setChecked(settings.keepAspect);
+	scale_ = new QComboBox(this);
+	for (const auto scale : SettingsStore::resolutionScales)
+		scale_->addItem(QString::number(scale) + "%", scale);
+	scale_->setCurrentIndex(scale_->findData(settings.resolutionScale));
 
 	quality_ = new QSpinBox(this);
 	quality_->setRange(1, 100);
@@ -59,26 +53,34 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	maxClients_->setRange(1, 64);
 	maxClients_->setValue(settings.maxClients);
 
-	const double aspect = settings.width > 0 ? static_cast<double>(settings.height) / settings.width : 9.0 / 16.0;
-	auto adjustingAspect = std::make_shared<bool>(false);
-	connect(width_, qOverload<int>(&QSpinBox::valueChanged), this, [this, aspect, adjustingAspect](int value) {
-		if (*adjustingAspect || !keepAspect_->isChecked())
-			return;
-		*adjustingAspect = true;
-		height_->setValue(std::clamp(static_cast<int>(std::lround(value * aspect)), 64, 4096));
-		*adjustingAspect = false;
-	});
-	connect(height_, qOverload<int>(&QSpinBox::valueChanged), this, [this, aspect, adjustingAspect](int value) {
-		if (*adjustingAspect || !keepAspect_->isChecked() || aspect <= 0.0)
-			return;
-		*adjustingAspect = true;
-		width_->setValue(std::clamp(static_cast<int>(std::lround(value / aspect)), 64, 4096));
-		*adjustingAspect = false;
-	});
+	connect(scale_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { refreshResolution(); });
 
 	status_ = new QLabel(this);
-	url_ = new QLabel(this);
-	url_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	resolution_ = new QLabel(this);
+	fingerprint_ = new QLabel(this);
+	fingerprint_->setWordWrap(true);
+	url_ = new QPushButton(this);
+	awakeUrl_ = new QPushButton(this);
+	exportCertificate_ = new QPushButton("Export trusted-device certificate…", this);
+	for (auto *button : {url_, awakeUrl_}) {
+		button->setFlat(true);
+		button->setCursor(Qt::PointingHandCursor);
+		button->setStyleSheet("QPushButton { color: palette(link); text-align: left; padding: 0; }");
+	}
+	connect(url_, &QPushButton::clicked, this, [this]() { copyUrl(url_->text(), "Preview URL copied"); });
+	connect(awakeUrl_, &QPushButton::clicked, this, [this]() { copyUrl(awakeUrl_->text(), "Stay-awake URL copied"); });
+	connect(exportCertificate_, &QPushButton::clicked, this, [this]() {
+		const auto path = QFileDialog::getSaveFileName(this, "Export OBS LAN Preview CA", "obs-lan-preview-ca.pem",
+								       "Certificate (*.pem *.cer)");
+		if (path.isEmpty())
+			return;
+		QString error;
+		if (!server_.exportTrustedCertificate(path, error)) {
+			status_->setText(error);
+			return;
+		}
+		status_->setText("Certificate exported. Install and trust it on the device before opening the HTTPS URL.");
+	});
 
 	auto *warning = new QLabel("Warning: LAN preview has no password. Anyone on the same network can view it while enabled.", this);
 	warning->setWordWrap(true);
@@ -87,13 +89,15 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	form->addRow(enabled_);
 	form->addRow("Port", port_);
 	form->addRow("Frame rate", fps_);
-	form->addRow("Width", width_);
-	form->addRow("Height", height_);
-	form->addRow("", keepAspect_);
+	form->addRow("Output scale", scale_);
+	form->addRow("Resulting resolution", resolution_);
 	form->addRow("JPEG quality", quality_);
 	form->addRow("Max clients", maxClients_);
 	form->addRow("Status", status_);
-	form->addRow("URL", url_);
+	form->addRow("Preview URL (click to copy)", url_);
+	form->addRow("Stay-awake URL (click to copy)", awakeUrl_);
+	form->addRow("Trusted-device CA", exportCertificate_);
+	form->addRow("CA SHA-256", fingerprint_);
 
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Close, this);
 	connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this]() {
@@ -120,10 +124,8 @@ PreviewSettings SettingsDialog::collect() const
 	settings.enabled = enabled_->isChecked();
 	settings.bindAddress = "0.0.0.0";
 	settings.port = port_->value();
-	settings.fps = fps_->value();
-	settings.width = width_->value();
-	settings.height = height_->value();
-	settings.keepAspect = keepAspect_->isChecked();
+	settings.fps = fps_->currentData().toInt();
+	settings.resolutionScale = scale_->currentData().toInt();
 	settings.quality = quality_->value();
 	settings.maxClients = maxClients_->value();
 	return SettingsStore::clamp(settings);
@@ -138,15 +140,45 @@ QString SettingsDialog::lanUrlForPort(int port)
 	return cachedUrl_;
 }
 
+void SettingsDialog::copyUrl(const QString &url, const QString &label)
+{
+	QGuiApplication::clipboard()->setText(url);
+	status_->setText(label);
+}
+
+void SettingsDialog::refreshResolution()
+{
+	obs_video_info info = {};
+	if (!obs_get_video_info(&info) || info.output_width == 0 || info.output_height == 0) {
+		resolution_->setText("OBS video output is not active");
+		return;
+	}
+
+	const auto output = SettingsStore::scaledResolution(static_cast<int>(info.output_width), static_cast<int>(info.output_height),
+							      scale_->currentData().toInt());
+	QString text = QString("%1 × %2 (from %3 × %4)")
+			       .arg(output.width)
+			       .arg(output.height)
+			       .arg(info.output_width)
+			       .arg(info.output_height);
+	if (scale_->currentData().toInt() == 100 && (info.output_width >= 2560 || info.output_height >= 1440))
+		text += " — high CPU and memory load";
+	resolution_->setText(text);
+}
+
 void SettingsDialog::refreshStatus()
 {
 	const auto settings = collect();
+	refreshResolution();
+	const auto previewUrl = lanUrlForPort(settings.port);
+	url_->setText(previewUrl);
+	awakeUrl_->setText(previewUrl + "?stay-awake=1");
+	fingerprint_->setText(server_.certificateFingerprint().isEmpty() ? "Enable and apply preview to create the local CA." :
+				      server_.certificateFingerprint());
 	if (server_.running()) {
 		status_->setText(QString("Running, %1 client(s)").arg(server_.clientCount()));
-		url_->setText(lanUrlForPort(settings.port));
 	} else {
 		const auto error = server_.lastError();
 		status_->setText(error.empty() ? "Stopped" : QString("Stopped: %1").arg(QString::fromStdString(error)));
-		url_->setText(lanUrlForPort(settings.port));
 	}
 }

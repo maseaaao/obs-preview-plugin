@@ -3,6 +3,7 @@
 #include "jpeg_encoder.hpp"
 
 #include <WS2tcpip.h>
+#include <Iphlpapi.h>
 
 #include <algorithm>
 #include <chrono>
@@ -30,10 +31,10 @@ private:
 	bool ok_ = false;
 };
 
-class AtomicCounterGuard {
+class AtomicDecrementGuard {
 public:
-	explicit AtomicCounterGuard(std::atomic_int &counter) : counter_(counter) { counter_.fetch_add(1); }
-	~AtomicCounterGuard() { counter_.fetch_sub(1); }
+	explicit AtomicDecrementGuard(std::atomic_int &counter) : counter_(counter) {}
+	~AtomicDecrementGuard() { counter_.fetch_sub(1); }
 
 private:
 	std::atomic_int &counter_;
@@ -79,6 +80,132 @@ std::string httpHeader(int status, const std::string &contentType, size_t length
 	out << "\r\n";
 	return out.str();
 }
+
+std::string localHostname()
+{
+	char hostname[256] = {};
+	return gethostname(hostname, sizeof(hostname)) == 0 ? hostname : "localhost";
+}
+
+std::vector<std::string> localIpv4Addresses()
+{
+	std::vector<std::string> addresses;
+	ULONG bufferSize = 15 * 1024;
+	std::vector<BYTE> buffer(bufferSize);
+	auto *adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
+	DWORD status = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+						      nullptr, adapters, &bufferSize);
+	if (status == ERROR_BUFFER_OVERFLOW) {
+		buffer.resize(bufferSize);
+		adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
+		status = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+						     nullptr, adapters, &bufferSize);
+	}
+	if (status == NO_ERROR) {
+		for (auto *adapter = adapters; adapter; adapter = adapter->Next) {
+			if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+				continue;
+			for (auto *unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
+				if (!unicast->Address.lpSockaddr || unicast->Address.lpSockaddr->sa_family != AF_INET)
+					continue;
+				const auto *ipv4 = reinterpret_cast<const sockaddr_in *>(unicast->Address.lpSockaddr);
+				char text[INET_ADDRSTRLEN] = {};
+				if (inet_ntop(AF_INET, &ipv4->sin_addr, text, sizeof(text)) && std::string(text).rfind("127.", 0) != 0)
+					addresses.emplace_back(text);
+			}
+		}
+	}
+	std::sort(addresses.begin(), addresses.end());
+	addresses.erase(std::unique(addresses.begin(), addresses.end()), addresses.end());
+	if (addresses.empty())
+		addresses.emplace_back("127.0.0.1");
+	return addresses;
+}
+
+std::string localIpv4()
+{
+	return localIpv4Addresses().front();
+}
+
+void appendU32(std::vector<uint8_t> &out, uint32_t value)
+{
+	out.push_back(static_cast<uint8_t>(value >> 24));
+	out.push_back(static_cast<uint8_t>(value >> 16));
+	out.push_back(static_cast<uint8_t>(value >> 8));
+	out.push_back(static_cast<uint8_t>(value));
+}
+
+uint32_t crc32(const uint8_t *data, size_t size)
+{
+	uint32_t crc = 0xffffffffU;
+	while (size--) {
+		crc ^= *data++;
+		for (int bit = 0; bit < 8; ++bit)
+			crc = (crc >> 1) ^ (0xedb88320U & static_cast<uint32_t>(-(static_cast<int32_t>(crc & 1))));
+	}
+	return ~crc;
+}
+
+uint32_t adler32(const std::vector<uint8_t> &data)
+{
+	uint32_t a = 1;
+	uint32_t b = 0;
+	for (const auto byte : data) {
+		a = (a + byte) % 65521U;
+		b = (b + a) % 65521U;
+	}
+	return (b << 16) | a;
+}
+
+void appendPngChunk(std::vector<uint8_t> &png, const char type[4], const std::vector<uint8_t> &data)
+{
+	appendU32(png, static_cast<uint32_t>(data.size()));
+	const auto start = png.size();
+	png.insert(png.end(), type, type + 4);
+	png.insert(png.end(), data.begin(), data.end());
+	appendU32(png, crc32(png.data() + start, 4 + data.size()));
+}
+
+std::vector<uint8_t> makeIconPng(int size)
+{
+	std::vector<uint8_t> raw;
+	raw.reserve(static_cast<size_t>(size) * (static_cast<size_t>(size) * 4 + 1));
+	for (int y = 0; y < size; ++y) {
+		raw.push_back(0);
+		for (int x = 0; x < size; ++x) {
+			const bool camera = x > size * 20 / 100 && x < size * 72 / 100 && y > size * 32 / 100 && y < size * 68 / 100;
+			const bool lens = (x - size / 2) * (x - size / 2) + (y - size / 2) * (y - size / 2) < (size / 9) * (size / 9);
+			raw.push_back(camera && !lens ? 100 : 17);
+			raw.push_back(camera && !lens ? 210 : 17);
+			raw.push_back(camera && !lens ? 255 : 17);
+			raw.push_back(255);
+		}
+	}
+
+	std::vector<uint8_t> compressed = {0x78, 0x01};
+	for (size_t offset = 0; offset < raw.size();) {
+		const auto chunk = static_cast<uint16_t>(std::min<size_t>(65535, raw.size() - offset));
+		compressed.push_back(offset + chunk == raw.size() ? 0x01 : 0x00);
+		compressed.push_back(static_cast<uint8_t>(chunk));
+		compressed.push_back(static_cast<uint8_t>(chunk >> 8));
+		const auto complement = static_cast<uint16_t>(~chunk);
+		compressed.push_back(static_cast<uint8_t>(complement));
+		compressed.push_back(static_cast<uint8_t>(complement >> 8));
+		compressed.insert(compressed.end(), raw.begin() + static_cast<ptrdiff_t>(offset), raw.begin() + static_cast<ptrdiff_t>(offset + chunk));
+		offset += chunk;
+	}
+	appendU32(compressed, adler32(raw));
+
+	std::vector<uint8_t> png = {137, 80, 78, 71, 13, 10, 26, 10};
+	std::vector<uint8_t> header;
+	appendU32(header, static_cast<uint32_t>(size));
+	appendU32(header, static_cast<uint32_t>(size));
+	header.insert(header.end(), {8, 6, 0, 0, 0});
+	appendPngChunk(png, "IHDR", header);
+	appendPngChunk(png, "IDAT", compressed);
+	appendPngChunk(png, "IEND", {});
+	return png;
+}
 }
 
 MjpegHttpServer::~MjpegHttpServer()
@@ -97,6 +224,8 @@ bool MjpegHttpServer::start(const PreviewSettings &settings)
 	}
 
 	settings_ = SettingsStore::clamp(settings);
+	if (!certificateAuthority_.ensure(localHostname(), localIpv4Addresses(), lastError_))
+		return false;
 	setLastError({});
 	clients_.store(0);
 	streamClients_.store(0);
@@ -281,37 +410,22 @@ PreviewSettings MjpegHttpServer::settings() const
 	return settings_;
 }
 
+bool MjpegHttpServer::exportTrustedCertificate(const QString &path, QString &error) const
+{
+	return certificateAuthority_.exportCertificate(path, error);
+}
+
+QString MjpegHttpServer::certificateFingerprint() const
+{
+	return certificateAuthority_.fingerprint();
+}
+
 std::string MjpegHttpServer::lanUrl(int port)
 {
 	static WsaSession wsa;
 	if (!wsa.ok())
-		return "http://127.0.0.1:" + std::to_string(port) + "/";
-
-	char hostname[256] = {};
-	if (gethostname(hostname, sizeof(hostname)) != 0)
-		return "http://127.0.0.1:" + std::to_string(port) + "/";
-
-	addrinfo hints = {};
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-
-	addrinfo *result = nullptr;
-	if (getaddrinfo(hostname, nullptr, &hints, &result) != 0)
-		return "http://127.0.0.1:" + std::to_string(port) + "/";
-
-	std::string ip = "127.0.0.1";
-	for (auto *addr = result; addr; addr = addr->ai_next) {
-		auto *ipv4 = reinterpret_cast<sockaddr_in *>(addr->ai_addr);
-		char buffer[INET_ADDRSTRLEN] = {};
-		inet_ntop(AF_INET, &ipv4->sin_addr, buffer, sizeof(buffer));
-		if (std::string(buffer).rfind("127.", 0) != 0) {
-			ip = buffer;
-			break;
-		}
-	}
-
-	freeaddrinfo(result);
-	return "http://" + ip + ":" + std::to_string(port) + "/";
+		return "https://127.0.0.1:" + std::to_string(port) + "/";
+	return "https://" + localIpv4() + ":" + std::to_string(port) + "/";
 }
 
 void MjpegHttpServer::acceptLoop()
@@ -324,69 +438,56 @@ void MjpegHttpServer::acceptLoop()
 			break;
 		}
 
-		if (clients_.load() >= settings_.maxClients) {
-			const std::string body = "Too many clients\n";
-			sendAll(client, httpHeader(503, "text/plain; charset=utf-8", body.size()));
-			sendAll(client, body);
+		if (clients_.fetch_add(1) >= settings_.maxClients) {
+			clients_.fetch_sub(1);
+			shutdown(client, SD_BOTH);
 			closesocket(client);
 			continue;
 		}
 
-		DWORD timeoutMs = 5000;
+		DWORD timeoutMs = 2000;
 		setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeoutMs), sizeof(timeoutMs));
 		setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&timeoutMs), sizeof(timeoutMs));
-
-		char buffer[4096] = {};
-		const int received = recv(client, buffer, sizeof(buffer) - 1, 0);
-		if (received <= 0) {
-			closesocket(client);
-			continue;
-		}
-
-		const auto path = parsePath(std::string(buffer, buffer + received));
-		if (path == "/" || path == "/index.html") {
-			AtomicCounterGuard clientGuard(clients_);
-			handleIndex(client);
-			closesocket(client);
-			continue;
-		}
-		if (path == "/health") {
-			AtomicCounterGuard clientGuard(clients_);
-			handleHealth(client);
-			closesocket(client);
-			continue;
-		}
-		if (path != "/preview.mjpg" && path != "/snapshot.jpg") {
-			AtomicCounterGuard clientGuard(clients_);
-			handleNotFound(client);
-			closesocket(client);
-			continue;
-		}
 
 		reapClientThreads();
 		auto done = std::make_shared<std::atomic_bool>(false);
 		std::lock_guard lock(clientThreadsMutex_);
-		clientThreads_.push_back({std::thread(&MjpegHttpServer::clientLoop, this, client, path, done), done});
+		clientThreads_.push_back({std::thread(&MjpegHttpServer::clientLoop, this, client, done), done});
 	}
 }
 
-void MjpegHttpServer::clientLoop(SOCKET client, std::string path, std::shared_ptr<std::atomic_bool> done)
+void MjpegHttpServer::clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool> done)
 {
 	ThreadDoneGuard doneGuard(std::move(done));
-	AtomicCounterGuard clientGuard(clients_);
+	AtomicDecrementGuard clientGuard(clients_);
+	TlsConnection connection;
+	if (!connection.accept(client, certificateAuthority_.serverCertificate()))
+		return;
 
+	char buffer[4096] = {};
+	const int received = connection.receive(buffer, sizeof(buffer) - 1);
+	if (received <= 0)
+		return;
+
+	const std::string request(buffer, buffer + received);
+	const auto path = parsePath(request);
+	const bool stayAwake = request.find("?stay-awake=1") != std::string::npos;
 	if (path == "/" || path == "/index.html")
-		handleIndex(client);
-	else if (path == "/preview.mjpg")
-		handlePreview(client);
-	else if (path == "/snapshot.jpg")
-		handleSnapshot(client);
+		handleIndex(connection, stayAwake);
 	else if (path == "/health")
-		handleHealth(client);
+		handleHealth(connection);
+	else if (path == "/manifest.webmanifest")
+		handleManifest(connection, stayAwake);
+	else if (path == "/service-worker.js")
+		handleServiceWorker(connection);
+	else if (path == "/icon-192.png" || path == "/icon-512.png")
+		handleIcon(connection, path == "/icon-512.png" ? 512 : 192);
+	else if (path == "/preview.mjpg")
+		handlePreview(connection);
+	else if (path == "/snapshot.jpg")
+		handleSnapshot(connection);
 	else
-		handleNotFound(client);
-
-	closesocket(client);
+		handleNotFound(connection);
 }
 
 void MjpegHttpServer::encoderLoop()
@@ -437,18 +538,68 @@ void MjpegHttpServer::encoderLoop()
 	}
 }
 
-void MjpegHttpServer::handleIndex(SOCKET client)
+void MjpegHttpServer::handleIndex(TlsConnection &client, bool stayAwake)
 {
+	const std::string manifest = stayAwake ? "/manifest.webmanifest?stay-awake=1" : "/manifest.webmanifest";
 	const std::string body =
-		"<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-		"<title>OBS LAN Preview</title><style>body{margin:0;background:#111;color:#eee;font:14px system-ui}"
-		"main{min-height:100vh;display:grid;place-items:center}img{display:block;width:100vw;height:100vh;object-fit:contain;object-position:center}</style></head>"
-		"<body><main><img src=\"/preview.mjpg\" alt=\"OBS LAN Preview\"></main></body></html>";
+		"<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+		"<meta name=\"theme-color\" content=\"#111111\"><meta name=\"apple-mobile-web-app-capable\" content=\"yes\">"
+		"<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black\"><link rel=\"apple-touch-icon\" href=\"/icon-192.png\">"
+		"<link rel=\"manifest\" href=\"" + manifest + "\"><title>OBS LAN Preview</title>"
+		"<style>body{margin:0;background:#111;color:#eee;font:14px system-ui}main{min-height:100vh;display:grid;place-items:center}"
+		"img{display:block;width:100vw;height:100vh;object-fit:contain;object-position:center}.status{position:fixed;left:12px;bottom:12px;"
+		"padding:6px 9px;border-radius:7px;background:#000a;font-size:12px}.status button{margin-left:6px}</style></head>"
+		"<body><main><img id=\"preview\" alt=\"OBS LAN Preview\"></main><div class=\"status\" id=\"status\" hidden></div>"
+		"<script>(()=>{const image=document.getElementById('preview'),status=document.getElementById('status');"
+		"const awake=new URLSearchParams(location.search).get('stay-awake')==='1';let lock=null,streaming=false;"
+		"function setStatus(text,retry){status.hidden=!text;status.textContent=text;if(retry){const b=document.createElement('button');b.textContent='Try again';b.onclick=()=>requestLock();status.append(b)}}"
+		"function start(){if(streaming||document.visibilityState!=='visible')return;streaming=true;image.src='/preview.mjpg?cache='+Date.now()}"
+		"function releaseLock(){const current=lock;lock=null;if(current)current.release().catch(()=>{})}"
+		"function stop(){if(streaming){streaming=false;image.removeAttribute('src')}releaseLock()}"
+		"async function requestLock(){if(lock)return setStatus('Screen stays awake',false);if(!awake||document.visibilityState!=='visible'||!('wakeLock'in navigator))return setStatus(awake?'Wake lock is not supported':'',false);"
+		"try{const sentinel=await navigator.wakeLock.request('screen');lock=sentinel;sentinel.addEventListener('release',()=>{if(lock===sentinel)lock=null;if(document.visibilityState==='visible')setStatus('Screen wake lock was released',true)});setStatus('Screen stays awake',false)}"
+		"catch(e){lock=null;setStatus('Unable to keep screen awake',true)}}"
+		"document.addEventListener('visibilitychange',()=>{if(document.hidden){stop();return}start();if(awake)requestLock()});window.addEventListener('pagehide',stop);"
+		"if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js').catch(()=>{});start();if(awake)requestLock()})();</script></body></html>";
 	sendAll(client, httpHeader(200, "text/html; charset=utf-8", body.size()));
 	sendAll(client, body);
 }
 
-void MjpegHttpServer::handleHealth(SOCKET client)
+void MjpegHttpServer::handleManifest(TlsConnection &client, bool stayAwake)
+{
+	const std::string suffix = stayAwake ? "?stay-awake=1" : "";
+	const std::string name = stayAwake ? "OBS LAN Preview Awake" : "OBS LAN Preview";
+	const std::string body = "{\"id\":\"/" + suffix + "\",\"name\":\"" + name +
+		"\",\"short_name\":\"OBS Preview\",\"start_url\":\"/" + suffix +
+		"\",\"display\":\"standalone\",\"background_color\":\"#111111\",\"theme_color\":\"#111111\","
+		"\"icons\":[{\"src\":\"/icon-192.png\",\"sizes\":\"192x192\",\"type\":\"image/png\",\"purpose\":\"any maskable\"},"
+		"{\"src\":\"/icon-512.png\",\"sizes\":\"512x512\",\"type\":\"image/png\",\"purpose\":\"any maskable\"}]}";
+	sendAll(client, httpHeader(200, "application/manifest+json; charset=utf-8", body.size()));
+	sendAll(client, body);
+}
+
+void MjpegHttpServer::handleServiceWorker(TlsConnection &client)
+{
+	const std::string body =
+		"const CACHE='obs-lan-preview-v1';const SHELL=['/','/icon-192.png','/icon-512.png'];"
+		"self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));"
+		"self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));"
+		"self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(u.origin===location.origin&&SHELL.includes(u.pathname))"
+		"e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)))});";
+	sendAll(client, httpHeader(200, "application/javascript; charset=utf-8", body.size()));
+	sendAll(client, body);
+}
+
+void MjpegHttpServer::handleIcon(TlsConnection &client, int size)
+{
+	static const auto icon192 = makeIconPng(192);
+	static const auto icon512 = makeIconPng(512);
+	const auto &body = size == 512 ? icon512 : icon192;
+	sendAll(client, httpHeader(200, "image/png", body.size()));
+	sendAll(client, reinterpret_cast<const char *>(body.data()), body.size());
+}
+
+void MjpegHttpServer::handleHealth(TlsConnection &client)
 {
 	const auto encodedFrames = encodedFrames_.load();
 	const auto totalEncodeUs = encodeTimeUs_.load();
@@ -479,14 +630,14 @@ void MjpegHttpServer::handleHealth(SOCKET client)
 	sendAll(client, text);
 }
 
-void MjpegHttpServer::handleNotFound(SOCKET client)
+void MjpegHttpServer::handleNotFound(TlsConnection &client)
 {
 	const std::string body = "Not found\n";
 	sendAll(client, httpHeader(404, "text/plain; charset=utf-8", body.size()));
 	sendAll(client, body);
 }
 
-void MjpegHttpServer::handleSnapshot(SOCKET client)
+void MjpegHttpServer::handleSnapshot(TlsConnection &client)
 {
 	JpegFrame jpeg;
 	uint64_t generation = 0;
@@ -517,7 +668,7 @@ void MjpegHttpServer::handleSnapshot(SOCKET client)
 	sendAll(client, reinterpret_cast<const char *>(jpeg->data()), jpeg->size());
 }
 
-void MjpegHttpServer::handlePreview(SOCKET client)
+void MjpegHttpServer::handlePreview(TlsConnection &client)
 {
 	setStreamClientActive(true);
 	const std::string header =
@@ -627,20 +778,12 @@ void MjpegHttpServer::updateFrameDemand()
 		callback(needed);
 }
 
-bool MjpegHttpServer::sendAll(SOCKET socket, const char *data, size_t size)
+bool MjpegHttpServer::sendAll(TlsConnection &socket, const char *data, size_t size)
 {
-	constexpr size_t sendChunkSize = 64 * 1024;
-	size_t sent = 0;
-	while (sent < size) {
-		const int chunk = send(socket, data + sent, static_cast<int>(std::min<size_t>(size - sent, sendChunkSize)), 0);
-		if (chunk <= 0)
-			return false;
-		sent += static_cast<size_t>(chunk);
-	}
-	return true;
+	return socket.sendAll(data, size);
 }
 
-bool MjpegHttpServer::sendAll(SOCKET socket, const std::string &data)
+bool MjpegHttpServer::sendAll(TlsConnection &socket, const std::string &data)
 {
 	return sendAll(socket, data.data(), data.size());
 }

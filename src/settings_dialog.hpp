@@ -8,8 +8,10 @@
 #include <functional>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QSpinBox;
+class QPushButton;
 
 class SettingsDialog : public QDialog {
 public:
@@ -20,21 +22,25 @@ public:
 private:
 	PreviewSettings collect() const;
 	QString lanUrlForPort(int port);
+	void copyUrl(const QString &url, const QString &label);
+	void refreshResolution();
 	void refreshStatus();
 
 	const MjpegHttpServer &server_;
 	ApplyCallback apply_;
 
 	QCheckBox *enabled_ = nullptr;
-	QCheckBox *keepAspect_ = nullptr;
 	QSpinBox *port_ = nullptr;
-	QSpinBox *fps_ = nullptr;
-	QSpinBox *width_ = nullptr;
-	QSpinBox *height_ = nullptr;
+	QComboBox *fps_ = nullptr;
+	QComboBox *scale_ = nullptr;
 	QSpinBox *quality_ = nullptr;
 	QSpinBox *maxClients_ = nullptr;
 	QLabel *status_ = nullptr;
-	QLabel *url_ = nullptr;
+	QLabel *resolution_ = nullptr;
+	QLabel *fingerprint_ = nullptr;
+	QPushButton *url_ = nullptr;
+	QPushButton *awakeUrl_ = nullptr;
+	QPushButton *exportCertificate_ = nullptr;
 	int cachedUrlPort_ = 0;
 	QString cachedUrl_;
 };

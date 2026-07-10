@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.28...3.30)
 
 project(obs-lan-preview VERSION 0.1.6 LANGUAGES CXX)
 
+include(CTest)
+
 if(NOT WIN32)
   message(FATAL_ERROR "obs-lan-preview v1 is Windows-only.")
 endif()
@@ -28,6 +30,10 @@ add_library(${PROJECT_NAME} MODULE
   src/settings.hpp
   src/settings_dialog.cpp
   src/settings_dialog.hpp
+  src/tls_certificate.cpp
+  src/tls_certificate.hpp
+  src/tls_connection.cpp
+  src/tls_connection.hpp
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -45,6 +51,9 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   oleaut32
   windowscodecs
   ws2_32
+  iphlpapi
+  crypt32
+  secur32
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -64,6 +73,19 @@ install(FILES README.md
 install(FILES LICENSE
   DESTINATION "data/obs-plugins/obs-lan-preview"
 )
+
+if(BUILD_TESTING)
+  add_executable(obs-lan-preview-settings-tests
+    tests/settings_tests.cpp
+    src/settings.cpp
+    src/settings.hpp
+    src/capture_pacing.hpp
+  )
+  target_link_libraries(obs-lan-preview-settings-tests PRIVATE Qt6::Core)
+  target_include_directories(obs-lan-preview-settings-tests PRIVATE src)
+  target_compile_definitions(obs-lan-preview-settings-tests PRIVATE NOMINMAX)
+  add_test(NAME obs-lan-preview-settings COMMAND obs-lan-preview-settings-tests)
+endif()
 
 
 
