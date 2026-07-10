@@ -10,6 +10,50 @@
 #include <sstream>
 #include <utility>
 
+class HttpConnection {
+public:
+	~HttpConnection()
+	{
+		if (!tls_ && socket_ != INVALID_SOCKET) {
+			shutdown(socket_, SD_BOTH);
+			closesocket(socket_);
+		}
+	}
+
+	bool open(SOCKET socket, bool tls, PCCERT_CONTEXT certificate)
+	{
+		tls_ = tls;
+		if (tls_)
+			return tlsConnection_.accept(socket, certificate);
+		socket_ = socket;
+		return true;
+	}
+
+	int receive(char *buffer, int size)
+	{
+		return tls_ ? tlsConnection_.receive(buffer, size) : recv(socket_, buffer, size, 0);
+	}
+
+	bool sendAll(const char *data, size_t size)
+	{
+		if (tls_)
+			return tlsConnection_.sendAll(data, size);
+		while (size > 0) {
+			const auto sent = send(socket_, data, static_cast<int>(std::min<size_t>(size, 64 * 1024)), 0);
+			if (sent <= 0)
+				return false;
+			data += sent;
+			size -= static_cast<size_t>(sent);
+		}
+		return true;
+	}
+
+private:
+	bool tls_ = false;
+	SOCKET socket_ = INVALID_SOCKET;
+	TlsConnection tlsConnection_;
+};
+
 namespace {
 class WsaSession {
 public:
@@ -254,40 +298,42 @@ bool MjpegHttpServer::start(const PreviewSettings &settings)
 	}
 	running_.store(true);
 
-	listenSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (listenSocket_ == INVALID_SOCKET) {
-		setLastError("Failed to create listen socket.");
-		running_.store(false);
-		return false;
-	}
-
-	BOOL reuse = TRUE;
-	setsockopt(listenSocket_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
-
 	sockaddr_in address = {};
 	address.sin_family = AF_INET;
-	address.sin_port = htons(static_cast<u_short>(settings_.port));
 	if (inet_pton(AF_INET, settings_.bindAddress.toUtf8().constData(), &address.sin_addr) != 1)
 		address.sin_addr.s_addr = htonl(INADDR_ANY);
-
-	if (bind(listenSocket_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == SOCKET_ERROR) {
-		setLastError("Failed to bind port " + std::to_string(settings_.port) + ". It may already be in use.");
-		closesocket(listenSocket_);
-		listenSocket_ = INVALID_SOCKET;
-		running_.store(false);
-		return false;
-	}
-
-	if (listen(listenSocket_, SOMAXCONN) == SOCKET_ERROR) {
-		setLastError("Failed to listen on port " + std::to_string(settings_.port) + ".");
-		closesocket(listenSocket_);
-		listenSocket_ = INVALID_SOCKET;
+	auto openListener = [&](int port, const char *protocol, SOCKET &listener) {
+		listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (listener == INVALID_SOCKET) {
+			setLastError(std::string("Failed to create ") + protocol + " listener.");
+			return false;
+		}
+		BOOL reuse = TRUE;
+		setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+		address.sin_port = htons(static_cast<u_short>(port));
+		if (bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == SOCKET_ERROR ||
+		    listen(listener, SOMAXCONN) == SOCKET_ERROR) {
+			setLastError(std::string("Failed to listen for ") + protocol + " on port " + std::to_string(port) +
+				     ". It may already be in use.");
+			closesocket(listener);
+			listener = INVALID_SOCKET;
+			return false;
+		}
+		return true;
+	};
+	if (!openListener(settings_.port, "HTTPS", httpsListenSocket_) ||
+	    !openListener(settings_.httpPort, "HTTP", httpListenSocket_)) {
+		if (httpsListenSocket_ != INVALID_SOCKET) {
+			closesocket(httpsListenSocket_);
+			httpsListenSocket_ = INVALID_SOCKET;
+		}
 		running_.store(false);
 		return false;
 	}
 
 	encoderThread_ = std::thread(&MjpegHttpServer::encoderLoop, this);
-	acceptThread_ = std::thread(&MjpegHttpServer::acceptLoop, this);
+	httpsAcceptThread_ = std::thread(&MjpegHttpServer::acceptLoop, this, httpsListenSocket_, true);
+	httpAcceptThread_ = std::thread(&MjpegHttpServer::acceptLoop, this, httpListenSocket_, false);
 	return true;
 }
 
@@ -296,17 +342,21 @@ void MjpegHttpServer::stop()
 	if (!running_.exchange(false))
 		return;
 
-	if (listenSocket_ != INVALID_SOCKET) {
-		shutdown(listenSocket_, SD_BOTH);
-		closesocket(listenSocket_);
-		listenSocket_ = INVALID_SOCKET;
+	for (auto *listener : {&httpsListenSocket_, &httpListenSocket_}) {
+		if (*listener != INVALID_SOCKET) {
+			shutdown(*listener, SD_BOTH);
+			closesocket(*listener);
+			*listener = INVALID_SOCKET;
+		}
 	}
 
 	frameCv_.notify_all();
 	rawCv_.notify_all();
 
-	if (acceptThread_.joinable())
-		acceptThread_.join();
+	if (httpsAcceptThread_.joinable())
+		httpsAcceptThread_.join();
+	if (httpAcceptThread_.joinable())
+		httpAcceptThread_.join();
 	if (encoderThread_.joinable())
 		encoderThread_.join();
 
@@ -420,18 +470,19 @@ QString MjpegHttpServer::certificateFingerprint() const
 	return certificateAuthority_.fingerprint();
 }
 
-std::string MjpegHttpServer::lanUrl(int port)
+std::string MjpegHttpServer::lanUrl(int port, bool tls)
 {
 	static WsaSession wsa;
+	const std::string scheme = tls ? "https://" : "http://";
 	if (!wsa.ok())
-		return "https://127.0.0.1:" + std::to_string(port) + "/";
-	return "https://" + localIpv4() + ":" + std::to_string(port) + "/";
+		return scheme + "127.0.0.1:" + std::to_string(port) + "/";
+	return scheme + localIpv4() + ":" + std::to_string(port) + "/";
 }
 
-void MjpegHttpServer::acceptLoop()
+void MjpegHttpServer::acceptLoop(SOCKET listener, bool tls)
 {
 	while (running_.load()) {
-		SOCKET client = accept(listenSocket_, nullptr, nullptr);
+		SOCKET client = accept(listener, nullptr, nullptr);
 		if (client == INVALID_SOCKET) {
 			if (running_.load())
 				setLastError("Accept failed.");
@@ -452,16 +503,16 @@ void MjpegHttpServer::acceptLoop()
 		reapClientThreads();
 		auto done = std::make_shared<std::atomic_bool>(false);
 		std::lock_guard lock(clientThreadsMutex_);
-		clientThreads_.push_back({std::thread(&MjpegHttpServer::clientLoop, this, client, done), done});
+		clientThreads_.push_back({std::thread(&MjpegHttpServer::clientLoop, this, client, done, tls), done});
 	}
 }
 
-void MjpegHttpServer::clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool> done)
+void MjpegHttpServer::clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool> done, bool tls)
 {
 	ThreadDoneGuard doneGuard(std::move(done));
 	AtomicDecrementGuard clientGuard(clients_);
-	TlsConnection connection;
-	if (!connection.accept(client, certificateAuthority_.serverCertificate()))
+	HttpConnection connection;
+	if (!connection.open(client, tls, certificateAuthority_.serverCertificate()))
 		return;
 
 	char buffer[4096] = {};
@@ -473,7 +524,7 @@ void MjpegHttpServer::clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool
 	const auto path = parsePath(request);
 	const bool stayAwake = request.find("?stay-awake=1") != std::string::npos;
 	if (path == "/" || path == "/index.html")
-		handleIndex(connection, stayAwake);
+		handleIndex(connection, stayAwake, tls);
 	else if (path == "/health")
 		handleHealth(connection);
 	else if (path == "/manifest.webmanifest")
@@ -538,14 +589,15 @@ void MjpegHttpServer::encoderLoop()
 	}
 }
 
-void MjpegHttpServer::handleIndex(TlsConnection &client, bool stayAwake)
+void MjpegHttpServer::handleIndex(HttpConnection &client, bool stayAwake, bool tls)
 {
 	const std::string manifest = stayAwake ? "/manifest.webmanifest?stay-awake=1" : "/manifest.webmanifest";
+	const std::string pwaHead = tls ? "<link rel=\"apple-touch-icon\" href=\"/icon-192.png\"><link rel=\"manifest\" href=\"" + manifest + "\">" : "";
+	const std::string pwaScript = tls ? "if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js').catch(()=>{});" : "";
 	const std::string body =
 		"<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
 		"<meta name=\"theme-color\" content=\"#111111\"><meta name=\"apple-mobile-web-app-capable\" content=\"yes\">"
-		"<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black\"><link rel=\"apple-touch-icon\" href=\"/icon-192.png\">"
-		"<link rel=\"manifest\" href=\"" + manifest + "\"><title>OBS LAN Preview</title>"
+		"<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black\">" + pwaHead + "<title>OBS LAN Preview</title>"
 		"<style>body{margin:0;background:#111;color:#eee;font:14px system-ui}main{min-height:100vh;display:grid;place-items:center}"
 		"img{display:block;width:100vw;height:100vh;object-fit:contain;object-position:center}.status{position:fixed;left:12px;bottom:12px;"
 		"padding:6px 9px;border-radius:7px;background:#000a;font-size:12px}.status button{margin-left:6px}</style></head>"
@@ -559,13 +611,13 @@ void MjpegHttpServer::handleIndex(TlsConnection &client, bool stayAwake)
 		"async function requestLock(){if(lock)return setStatus('Screen stays awake',false);if(!awake||document.visibilityState!=='visible'||!('wakeLock'in navigator))return setStatus(awake?'Wake lock is not supported':'',false);"
 		"try{const sentinel=await navigator.wakeLock.request('screen');lock=sentinel;sentinel.addEventListener('release',()=>{if(lock===sentinel)lock=null;if(document.visibilityState==='visible')setStatus('Screen wake lock was released',true)});setStatus('Screen stays awake',false)}"
 		"catch(e){lock=null;setStatus('Unable to keep screen awake',true)}}"
-		"document.addEventListener('visibilitychange',()=>{if(document.hidden){stop();return}start();if(awake)requestLock()});window.addEventListener('pagehide',stop);"
-		"if('serviceWorker'in navigator)navigator.serviceWorker.register('/service-worker.js').catch(()=>{});start();if(awake)requestLock()})();</script></body></html>";
+		"document.addEventListener('visibilitychange',()=>{if(document.hidden){stop();return}start();if(awake)requestLock()});window.addEventListener('pagehide',stop);" +
+		pwaScript + "start();if(awake)requestLock()})();</script></body></html>";
 	sendAll(client, httpHeader(200, "text/html; charset=utf-8", body.size()));
 	sendAll(client, body);
 }
 
-void MjpegHttpServer::handleManifest(TlsConnection &client, bool stayAwake)
+void MjpegHttpServer::handleManifest(HttpConnection &client, bool stayAwake)
 {
 	const std::string suffix = stayAwake ? "?stay-awake=1" : "";
 	const std::string name = stayAwake ? "OBS LAN Preview Awake" : "OBS LAN Preview";
@@ -578,7 +630,7 @@ void MjpegHttpServer::handleManifest(TlsConnection &client, bool stayAwake)
 	sendAll(client, body);
 }
 
-void MjpegHttpServer::handleServiceWorker(TlsConnection &client)
+void MjpegHttpServer::handleServiceWorker(HttpConnection &client)
 {
 	const std::string body =
 		"const CACHE='obs-lan-preview-v1';const SHELL=['/','/icon-192.png','/icon-512.png'];"
@@ -590,7 +642,7 @@ void MjpegHttpServer::handleServiceWorker(TlsConnection &client)
 	sendAll(client, body);
 }
 
-void MjpegHttpServer::handleIcon(TlsConnection &client, int size)
+void MjpegHttpServer::handleIcon(HttpConnection &client, int size)
 {
 	static const auto icon192 = makeIconPng(192);
 	static const auto icon512 = makeIconPng(512);
@@ -599,7 +651,7 @@ void MjpegHttpServer::handleIcon(TlsConnection &client, int size)
 	sendAll(client, reinterpret_cast<const char *>(body.data()), body.size());
 }
 
-void MjpegHttpServer::handleHealth(TlsConnection &client)
+void MjpegHttpServer::handleHealth(HttpConnection &client)
 {
 	const auto encodedFrames = encodedFrames_.load();
 	const auto totalEncodeUs = encodeTimeUs_.load();
@@ -630,14 +682,14 @@ void MjpegHttpServer::handleHealth(TlsConnection &client)
 	sendAll(client, text);
 }
 
-void MjpegHttpServer::handleNotFound(TlsConnection &client)
+void MjpegHttpServer::handleNotFound(HttpConnection &client)
 {
 	const std::string body = "Not found\n";
 	sendAll(client, httpHeader(404, "text/plain; charset=utf-8", body.size()));
 	sendAll(client, body);
 }
 
-void MjpegHttpServer::handleSnapshot(TlsConnection &client)
+void MjpegHttpServer::handleSnapshot(HttpConnection &client)
 {
 	JpegFrame jpeg;
 	uint64_t generation = 0;
@@ -668,7 +720,7 @@ void MjpegHttpServer::handleSnapshot(TlsConnection &client)
 	sendAll(client, reinterpret_cast<const char *>(jpeg->data()), jpeg->size());
 }
 
-void MjpegHttpServer::handlePreview(TlsConnection &client)
+void MjpegHttpServer::handlePreview(HttpConnection &client)
 {
 	setStreamClientActive(true);
 	const std::string header =
@@ -778,12 +830,12 @@ void MjpegHttpServer::updateFrameDemand()
 		callback(needed);
 }
 
-bool MjpegHttpServer::sendAll(TlsConnection &socket, const char *data, size_t size)
+bool MjpegHttpServer::sendAll(HttpConnection &socket, const char *data, size_t size)
 {
 	return socket.sendAll(data, size);
 }
 
-bool MjpegHttpServer::sendAll(TlsConnection &socket, const std::string &data)
+bool MjpegHttpServer::sendAll(HttpConnection &socket, const std::string &data)
 {
 	return sendAll(socket, data.data(), data.size());
 }

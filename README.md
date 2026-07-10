@@ -7,10 +7,11 @@
 
 Windows-first OBS Studio plugin that serves the current Program output to the local network as a live MJPEG preview.
 
-Default preview URL:
+Default preview URLs:
 
 ```text
 https://<pc-lan-ip>:9181/
+http://<pc-lan-ip>:9180/
 ```
 
 <img src="docs/logo.jpg" width="200" alt="Логотип">
@@ -41,16 +42,16 @@ For the portable package, extract the archive into the OBS Studio installation d
 1. Install the plugin into OBS.
 2. Open OBS.
 3. Go to `Tools -> LAN Preview`.
-4. Enable preview, apply settings, then click **Export trusted-device certificate…**.
-5. Install the exported CA certificate as trusted on each phone/tablet, then open the shown HTTPS URL.
+4. Enable preview and apply settings.
+5. Open the shown HTTP URL for an immediate, unencrypted preview; or export the trusted-device certificate, install it on each phone/tablet, then open the HTTPS URL.
 
 The certificate fingerprint displayed by the plugin lets you verify the file before trusting it. The plugin creates a stable local CA for this OBS user; it is not a public Internet certificate.
 
 For repeatable TLS, mobile, PWA, and performance acceptance checks, see [Mobile Validation](docs/mobile-validation.md).
 
-Click either URL in the settings dialog to copy it. The regular URL only shows the preview. The **Stay-awake URL** adds `?stay-awake=1` and asks compatible browsers to keep the screen on while the page is visible.
+Click any URL in the settings dialog to copy it. The regular HTTP and HTTPS URLs show the preview. The HTTPS **Stay-awake URL** adds `?stay-awake=1` and asks compatible browsers to keep the screen on while the page is visible.
 
-On Android, use the browser install option; on iPhone and iPad, use Safari **Share → Add to Home Screen**. The installed preview opens as a standalone web app.
+On Android, use the browser install option; on iPhone and iPad, use Safari **Share → Add to Home Screen**. These PWA features require the HTTPS URL; the HTTP URL is for direct browser viewing.
 
 Windows Firewall may ask whether OBS can accept local network connections. Allow private networks if you want phone or tablet access.
 
@@ -60,15 +61,16 @@ Windows Firewall may ask whether OBS can accept local network connections. Allow
 - 33% of the OBS output resolution
 - JPEG quality 70%
 - Bind address `0.0.0.0`
+- HTTPS port `9181`; HTTP port `9180`
 - No password in v1
 
 ## Performance Checks
 
-The plugin captures, JPEG-encodes, and serves frames over HTTPS, so it does extra work beyond the built-in OBS preview. See [Performance Measurement](docs/performance-measurement.md) for the repeatable measurement script and comparison protocol.
+The plugin captures, JPEG-encodes, and serves frames over HTTP and HTTPS, so it does extra work beyond the built-in OBS preview. See [Performance Measurement](docs/performance-measurement.md) for the repeatable measurement script and comparison protocol.
 
-## HTTPS Endpoints
+## HTTP and HTTPS Endpoints
 
-- `/` - installable browser page with the live preview
+- `/` - browser page with the live preview (installable over HTTPS)
 - `/preview.mjpg` - MJPEG stream
 - `/snapshot.jpg` - latest JPEG frame
 - `/health` - JSON status
@@ -77,7 +79,7 @@ The browser page stops its MJPEG connection when it is actually hidden (`visibil
 
 ## Security
 
-The plugin intentionally has no password. Anyone on the same network can view the preview while it is enabled. HTTPS encrypts the transport after the device trusts the exported local CA; it does not add access control.
+The plugin intentionally has no password. Anyone on the same network can view the preview while it is enabled. HTTP is unencrypted. HTTPS encrypts the transport after the device trusts the exported local CA; it does not add access control.
 
 Use it only on trusted private networks. See [SECURITY.md](SECURITY.md) for reporting guidance.
 

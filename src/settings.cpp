@@ -31,6 +31,7 @@ PreviewSettings SettingsStore::load() const
 	settings.enabled = obj.value("enabled").toBool(settings.enabled);
 	settings.bindAddress = obj.value("bindAddress").toString(settings.bindAddress);
 	settings.port = obj.value("port").toInt(settings.port);
+	settings.httpPort = obj.value("httpPort").toInt(settings.httpPort);
 	settings.fps = obj.value("fps").toInt(settings.fps);
 	if (obj.contains("resolutionScale")) {
 		settings.resolutionScale = obj.value("resolutionScale").toInt(settings.resolutionScale);
@@ -54,6 +55,7 @@ bool SettingsStore::save(const PreviewSettings &input) const
 	obj["enabled"] = settings.enabled;
 	obj["bindAddress"] = settings.bindAddress;
 	obj["port"] = settings.port;
+	obj["httpPort"] = settings.httpPort;
 	obj["fps"] = settings.fps;
 	obj["resolutionScale"] = settings.resolutionScale;
 	obj["quality"] = settings.quality;
@@ -70,6 +72,9 @@ bool SettingsStore::save(const PreviewSettings &input) const
 PreviewSettings SettingsStore::clamp(PreviewSettings settings)
 {
 	settings.port = std::clamp(settings.port, 1, 65535);
+	settings.httpPort = std::clamp(settings.httpPort, 1, 65535);
+	if (settings.httpPort == settings.port)
+		settings.httpPort = settings.port == 65535 ? 65534 : settings.port + 1;
 	settings.fps = normalizeFps(settings.fps);
 	settings.resolutionScale = normalizeResolutionScale(settings.resolutionScale);
 	settings.quality = std::clamp(settings.quality, 1, 100);

@@ -12,7 +12,10 @@ struct PreviewResolution {
 struct PreviewSettings {
 	bool enabled = false;
 	QString bindAddress = "0.0.0.0";
+	// HTTPS uses port; unencrypted HTTP is exposed separately to avoid mixing
+	// TLS handshakes and plain requests on one TCP listener.
 	int port = 9181;
+	int httpPort = 9180;
 	int fps = 5;
 	int resolutionScale = 33;
 	// Filled from the active OBS output before capture begins.

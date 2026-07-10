@@ -40,21 +40,21 @@ public:
 	bool exportTrustedCertificate(const QString &path, QString &error) const;
 	QString certificateFingerprint() const;
 
-	static std::string lanUrl(int port);
+	static std::string lanUrl(int port, bool tls);
 
 private:
-	void acceptLoop();
-	void clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool> done);
+	void acceptLoop(SOCKET listener, bool tls);
+	void clientLoop(SOCKET client, std::shared_ptr<std::atomic_bool> done, bool tls);
 	void encoderLoop();
 
-	void handleIndex(TlsConnection &client, bool stayAwake);
-	void handleManifest(TlsConnection &client, bool stayAwake);
-	void handleServiceWorker(TlsConnection &client);
-	void handleIcon(TlsConnection &client, int size);
-	void handleHealth(TlsConnection &client);
-	void handleSnapshot(TlsConnection &client);
-	void handlePreview(TlsConnection &client);
-	void handleNotFound(TlsConnection &client);
+	void handleIndex(class HttpConnection &client, bool stayAwake, bool tls);
+	void handleManifest(class HttpConnection &client, bool stayAwake);
+	void handleServiceWorker(class HttpConnection &client);
+	void handleIcon(class HttpConnection &client, int size);
+	void handleHealth(class HttpConnection &client);
+	void handleSnapshot(class HttpConnection &client);
+	void handlePreview(class HttpConnection &client);
+	void handleNotFound(class HttpConnection &client);
 
 	using JpegFrame = std::shared_ptr<const std::vector<uint8_t>>;
 
@@ -65,8 +65,8 @@ private:
 	void setSnapshotWaiterActive(bool active);
 	void updateFrameDemand();
 
-	static bool sendAll(TlsConnection &socket, const char *data, size_t size);
-	static bool sendAll(TlsConnection &socket, const std::string &data);
+	static bool sendAll(class HttpConnection &socket, const char *data, size_t size);
+	static bool sendAll(class HttpConnection &socket, const std::string &data);
 	static std::string parsePath(const std::string &request);
 
 	struct ClientThread {
@@ -87,9 +87,11 @@ private:
 	std::vector<std::vector<uint8_t>> rawBufferPool_;
 	uint64_t generation_ = 0;
 
-	SOCKET listenSocket_ = INVALID_SOCKET;
+	SOCKET httpsListenSocket_ = INVALID_SOCKET;
+	SOCKET httpListenSocket_ = INVALID_SOCKET;
 	LocalCertificateAuthority certificateAuthority_;
-	std::thread acceptThread_;
+	std::thread httpsAcceptThread_;
+	std::thread httpAcceptThread_;
 	std::thread encoderThread_;
 	std::vector<ClientThread> clientThreads_;
 	mutable std::mutex clientThreadsMutex_;

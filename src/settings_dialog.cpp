@@ -25,7 +25,7 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	settings = SettingsStore::clamp(settings);
 
 	setWindowTitle("LAN Preview");
-	resize(520, 330);
+	resize(560, 360);
 
 	enabled_ = new QCheckBox("Enable LAN preview", this);
 	enabled_->setChecked(settings.enabled);
@@ -33,6 +33,9 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	port_ = new QSpinBox(this);
 	port_->setRange(1, 65535);
 	port_->setValue(settings.port);
+	httpPort_ = new QSpinBox(this);
+	httpPort_->setRange(1, 65535);
+	httpPort_->setValue(settings.httpPort);
 
 	fps_ = new QComboBox(this);
 	for (const auto fps : SettingsStore::frameRates)
@@ -61,14 +64,16 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 	fingerprint_->setWordWrap(true);
 	url_ = new QPushButton(this);
 	awakeUrl_ = new QPushButton(this);
+	httpUrl_ = new QPushButton(this);
 	exportCertificate_ = new QPushButton("Export trusted-device certificate…", this);
-	for (auto *button : {url_, awakeUrl_}) {
+	for (auto *button : {url_, awakeUrl_, httpUrl_}) {
 		button->setFlat(true);
 		button->setCursor(Qt::PointingHandCursor);
 		button->setStyleSheet("QPushButton { color: palette(link); text-align: left; padding: 0; }");
 	}
 	connect(url_, &QPushButton::clicked, this, [this]() { copyUrl(url_->text(), "Preview URL copied"); });
 	connect(awakeUrl_, &QPushButton::clicked, this, [this]() { copyUrl(awakeUrl_->text(), "Stay-awake URL copied"); });
+	connect(httpUrl_, &QPushButton::clicked, this, [this]() { copyUrl(httpUrl_->text(), "HTTP preview URL copied"); });
 	connect(exportCertificate_, &QPushButton::clicked, this, [this]() {
 		const auto path = QFileDialog::getSaveFileName(this, "Export OBS LAN Preview CA", "obs-lan-preview-ca.pem",
 								       "Certificate (*.pem *.cer)");
@@ -82,27 +87,32 @@ SettingsDialog::SettingsDialog(PreviewSettings settings, const MjpegHttpServer &
 		status_->setText("Certificate exported. Install and trust it on the device before opening the HTTPS URL.");
 	});
 
-	auto *warning = new QLabel("Warning: LAN preview has no password. Anyone on the same network can view it while enabled.", this);
+	auto *warning = new QLabel("Warning: LAN preview has no password. HTTP is unencrypted; use it only on a trusted private network.", this);
 	warning->setWordWrap(true);
 
 	auto *form = new QFormLayout;
 	form->addRow(enabled_);
-	form->addRow("Port", port_);
+	form->addRow("HTTPS port", port_);
+	form->addRow("HTTP port", httpPort_);
 	form->addRow("Frame rate", fps_);
 	form->addRow("Output scale", scale_);
 	form->addRow("Resulting resolution", resolution_);
 	form->addRow("JPEG quality", quality_);
 	form->addRow("Max clients", maxClients_);
 	form->addRow("Status", status_);
-	form->addRow("Preview URL (click to copy)", url_);
-	form->addRow("Stay-awake URL (click to copy)", awakeUrl_);
+	form->addRow("HTTPS preview URL (click to copy)", url_);
+	form->addRow("HTTPS stay-awake URL (click to copy)", awakeUrl_);
+	form->addRow("HTTP preview URL (click to copy)", httpUrl_);
 	form->addRow("Trusted-device CA", exportCertificate_);
 	form->addRow("CA SHA-256", fingerprint_);
 
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Close, this);
 	connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this]() {
+		const auto settings = collect();
+		port_->setValue(settings.port);
+		httpPort_->setValue(settings.httpPort);
 		if (apply_)
-			apply_(collect());
+			apply_(settings);
 		refreshStatus();
 	});
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::accept);
@@ -124,6 +134,7 @@ PreviewSettings SettingsDialog::collect() const
 	settings.enabled = enabled_->isChecked();
 	settings.bindAddress = "0.0.0.0";
 	settings.port = port_->value();
+	settings.httpPort = httpPort_->value();
 	settings.fps = fps_->currentData().toInt();
 	settings.resolutionScale = scale_->currentData().toInt();
 	settings.quality = quality_->value();
@@ -131,13 +142,9 @@ PreviewSettings SettingsDialog::collect() const
 	return SettingsStore::clamp(settings);
 }
 
-QString SettingsDialog::lanUrlForPort(int port)
+QString SettingsDialog::lanUrlForPort(int port, bool tls) const
 {
-	if (cachedUrlPort_ != port || cachedUrl_.isEmpty()) {
-		cachedUrlPort_ = port;
-		cachedUrl_ = QString::fromStdString(MjpegHttpServer::lanUrl(port));
-	}
-	return cachedUrl_;
+	return QString::fromStdString(MjpegHttpServer::lanUrl(port, tls));
 }
 
 void SettingsDialog::copyUrl(const QString &url, const QString &label)
@@ -170,13 +177,14 @@ void SettingsDialog::refreshStatus()
 {
 	const auto settings = collect();
 	refreshResolution();
-	const auto previewUrl = lanUrlForPort(settings.port);
+	const auto previewUrl = lanUrlForPort(settings.port, true);
 	url_->setText(previewUrl);
 	awakeUrl_->setText(previewUrl + "?stay-awake=1");
+	httpUrl_->setText(lanUrlForPort(settings.httpPort, false));
 	fingerprint_->setText(server_.certificateFingerprint().isEmpty() ? "Enable and apply preview to create the local CA." :
 				      server_.certificateFingerprint());
 	if (server_.running()) {
-		status_->setText(QString("Running, %1 client(s)").arg(server_.clientCount()));
+		status_->setText(QString("HTTP and HTTPS running, %1 client(s)").arg(server_.clientCount()));
 	} else {
 		const auto error = server_.lastError();
 		status_->setText(error.empty() ? "Stopped" : QString("Stopped: %1").arg(QString::fromStdString(error)));

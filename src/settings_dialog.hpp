@@ -21,7 +21,7 @@ public:
 
 private:
 	PreviewSettings collect() const;
-	QString lanUrlForPort(int port);
+	QString lanUrlForPort(int port, bool tls) const;
 	void copyUrl(const QString &url, const QString &label);
 	void refreshResolution();
 	void refreshStatus();
@@ -31,6 +31,7 @@ private:
 
 	QCheckBox *enabled_ = nullptr;
 	QSpinBox *port_ = nullptr;
+	QSpinBox *httpPort_ = nullptr;
 	QComboBox *fps_ = nullptr;
 	QComboBox *scale_ = nullptr;
 	QSpinBox *quality_ = nullptr;
@@ -40,7 +41,6 @@ private:
 	QLabel *fingerprint_ = nullptr;
 	QPushButton *url_ = nullptr;
 	QPushButton *awakeUrl_ = nullptr;
+	QPushButton *httpUrl_ = nullptr;
 	QPushButton *exportCertificate_ = nullptr;
-	int cachedUrlPort_ = 0;
-	QString cachedUrl_;
 };

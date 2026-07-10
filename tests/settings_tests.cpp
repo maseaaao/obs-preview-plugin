@@ -14,6 +14,14 @@ int main()
 	assert(SettingsStore::normalizeFps(61) == 60);
 	assert(SettingsStore::normalizeResolutionScale(34) == 33);
 	assert(SettingsStore::normalizeResolutionScale(99) == 75);
+	PreviewSettings samePorts;
+	samePorts.port = 9181;
+	samePorts.httpPort = 9181;
+	assert(SettingsStore::clamp(samePorts).httpPort == 9182);
+	PreviewSettings highestPort;
+	highestPort.port = 65535;
+	highestPort.httpPort = 65535;
+	assert(SettingsStore::clamp(highestPort).httpPort == 65534);
 
 	const auto half = SettingsStore::scaledResolution(1920, 1080, 50);
 	assert(half.width == 960 && half.height == 540);

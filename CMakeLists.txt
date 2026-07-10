@@ -85,8 +85,10 @@ if(BUILD_TESTING)
   target_include_directories(obs-lan-preview-settings-tests PRIVATE src)
   target_compile_definitions(obs-lan-preview-settings-tests PRIVATE NOMINMAX)
   add_test(NAME obs-lan-preview-settings COMMAND obs-lan-preview-settings-tests)
+  set_tests_properties(obs-lan-preview-settings PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+  )
 endif()
-
 
 
 
