@@ -6,6 +6,7 @@ This project follows Semantic Versioning where practical.
 
 ## [Unreleased]
 
+- Install the plugin into both detected regular and Steam OBS Studio installations, including Steam libraries outside the default Steam folder.
 - Rebrand the user-facing product as LAN Preview and adopt the GPL-2.0-or-later license.
 - Regenerate the local HTTPS CA under the LAN Preview name; devices using HTTPS must trust a newly exported certificate after updating.
 - Reduce idle and multi-client overhead by starting OBS raw frame capture only while frames are demanded, handling short health/index requests without per-request threads, sharing encoded JPEG frames across clients, adding frame backpressure, reusing raw frame buffers, capturing BGR frames directly, and reusing the WIC imaging factory.

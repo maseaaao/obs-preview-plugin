@@ -37,7 +37,7 @@ Use one of these packages:
 - `obs-preview-plugin.windows-x64-installer.zip` - installer build.
 - `obs-preview-plugin.windows-x64-portable.zip` - portable OBS folder layout.
 
-The installer automatically detects both the regular OBS Studio installation and the Steam edition (including OBS installed in an additional Steam library). You can still change the target folder in the installer if needed.
+The installer detects the regular OBS Studio installation and the Steam edition (including OBS installed in an additional Steam library). If both editions are present, it installs the plugin into both automatically; the selected target folder remains editable in the installer for custom or portable layouts.
 
 For the portable package, extract the archive into the OBS Studio installation directory so `obs-plugins\64bit\obs-lan-preview.dll` lands under the OBS root.
 
