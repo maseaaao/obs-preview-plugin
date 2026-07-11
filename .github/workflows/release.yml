@@ -20,6 +20,8 @@ jobs:
     runs-on: windows-2022
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      OBS_VERSION: "32.1.2"
+      OBS_DEPS_DATE: "2025-08-23"
 
     steps:
       - name: Checkout
@@ -59,23 +61,42 @@ jobs:
 
           Write-Host "Using Inno Setup compiler at: $iscc"
 
+      - name: Restore OBS development cache
+        id: obs-dev-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\obs-dev\obs-prefix
+            C:\obs-dev\obs-studio-${{ env.OBS_VERSION }}\.deps
+          key: obs-development-${{ runner.os }}-${{ runner.arch }}-vs2022-${{ env.OBS_VERSION }}-deps-${{ env.OBS_DEPS_DATE }}-relwithdebinfo-v1
+
       - name: Checkout OBS Studio
+        if: steps.obs-dev-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          git clone --recursive --branch 32.1.2 https://github.com/obsproject/obs-studio.git C:\obs-dev\obs-studio-32.1.2
+          git clone --recursive --branch "${env:OBS_VERSION}" https://github.com/obsproject/obs-studio.git "C:\obs-dev\obs-studio-${env:OBS_VERSION}"
 
       - name: Build OBS development prefix
+        if: steps.obs-dev-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          cd C:\obs-dev\obs-studio-32.1.2
+          cd "C:\obs-dev\obs-studio-${env:OBS_VERSION}"
           cmake --preset windows-x64 -DCMAKE_INSTALL_PREFIX=C:/obs-dev/obs-prefix
-          cmake --build --preset windows-x64 --config RelWithDebInfo --target libobs obs-frontend-api
+          cmake --build --preset windows-x64 --config RelWithDebInfo --target libobs obs-frontend-api --parallel
           cmake --install build_x64 --prefix C:\obs-dev\obs-prefix --config RelWithDebInfo --component Development
 
       - name: Package plugin
         shell: pwsh
         run: |
           .\scripts\package-windows.ps1
+
+      - name: Upload release packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-lan-preview-${{ env.RELEASE_TAG }}-windows-x64
+          path: release/packages/*.zip
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Generate release notes
         shell: pwsh

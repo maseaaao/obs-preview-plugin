@@ -2,6 +2,8 @@ param(
     [string]$CMakePath = "C:\Program Files\CMake\bin\cmake.exe",
     [string]$InnoCompilerPath = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     [string]$PrefixPath = "C:/obs-dev/obs-prefix;C:/obs-dev/obs-studio-32.1.2/.deps/obs-deps-2025-08-23-x64;C:/obs-dev/obs-studio-32.1.2/.deps/obs-deps-qt6-2025-08-23-x64",
+    [ValidateRange(0, 256)]
+    [int]$Parallel = 0,
     [switch]$SkipBuild
 )
 
@@ -17,6 +19,18 @@ $packagesRoot = Join-Path $releaseRoot "packages"
 $portableZip = Join-Path $packagesRoot "obs-preview-plugin.windows-x64-portable.zip"
 $installerZip = Join-Path $packagesRoot "obs-preview-plugin.windows-x64-installer.zip"
 $installerExe = Join-Path $installerRoot "obs-lan-preview-$version-windows-x64-installer.exe"
+
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
 
 if (-not (Test-Path $CMakePath)) {
     $cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
@@ -45,10 +59,16 @@ if (-not (Test-Path $InnoCompilerPath)) {
 }
 
 if (-not $SkipBuild) {
-    & $CMakePath --preset windows-x64 "-DCMAKE_PREFIX_PATH=$PrefixPath"
-    & $CMakePath --build --preset windows-x64-release
-    & $CMakePath --install build/windows-x64 --config Release
-    & $InnoCompilerPath installer/obs-lan-preview.iss
+    Invoke-Checked -FilePath $CMakePath -Arguments @("--preset", "windows-x64", "-DCMAKE_PREFIX_PATH=$PrefixPath")
+
+    $buildArguments = @("--build", "--preset", "windows-x64-release", "--parallel")
+    if ($Parallel -gt 0) {
+        $buildArguments += $Parallel
+    }
+    Invoke-Checked -FilePath $CMakePath -Arguments $buildArguments
+
+    Invoke-Checked -FilePath $CMakePath -Arguments @("--install", "build/windows-x64", "--config", "Release")
+    Invoke-Checked -FilePath $InnoCompilerPath -Arguments @("installer/obs-lan-preview.iss")
 }
 
 if (-not (Test-Path (Join-Path $installRoot "obs-plugins\64bit\obs-lan-preview.dll"))) {

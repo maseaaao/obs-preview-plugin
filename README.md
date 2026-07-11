@@ -113,7 +113,7 @@ Configure and build:
 & "C:\Program Files\CMake\bin\cmake.exe" --preset windows-x64 `
   "-DCMAKE_PREFIX_PATH=C:/obs-dev/obs-prefix;C:/obs-dev/obs-studio-32.1.2/.deps/obs-deps-2025-08-23-x64;C:/obs-dev/obs-studio-32.1.2/.deps/obs-deps-qt6-2025-08-23-x64"
 
-cmake --build --preset windows-x64-release
+cmake --build --preset windows-x64-release --parallel
 cmake --install build/windows-x64 --config Release
 ```
 
@@ -124,6 +124,13 @@ Build both release zip assets:
 ```powershell
 .\scripts\package-windows.ps1
 ```
+
+For a packaging-only iteration after a successful build, use
+`.\scripts\package-windows.ps1 -SkipBuild`. The release workflow caches the
+pinned OBS development prefix and dependencies; a cache hit skips the OBS
+clone and build, while every run still builds and packages the plugin itself.
+The packaging script builds with all available cores by default; pass
+`-Parallel 4` to cap it.
 
 This creates:
 
