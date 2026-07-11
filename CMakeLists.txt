@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28...3.30)
 
-project(obs-lan-preview VERSION 0.2.3 LANGUAGES CXX)
+project(obs-lan-preview VERSION 0.2.4 LANGUAGES CXX)
 
 include(CTest)
 
@@ -89,6 +89,7 @@ if(BUILD_TESTING)
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
   )
 endif()
+
 
 
 
