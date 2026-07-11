@@ -29,6 +29,97 @@ Source: "..\README.md"; DestDir: "{app}\data\obs-plugins\obs-lan-preview"; Flags
 Source: "..\LICENSE"; DestDir: "{app}\data\obs-plugins\obs-lan-preview"; Flags: ignoreversion
 
 [Code]
+const
+  SteamObsAppId = '1905180';
+
+function IsObsStudioDir(const Dir: String): Boolean;
+begin
+  Result := FileExists(AddBackslash(Dir) + 'bin\64bit\obs64.exe');
+end;
+
+function GetQuotedVdfValue(const Line, Key: String; var Value: String): Boolean;
+var
+  KeyPosition: Integer;
+  Remainder: String;
+  FirstQuote: Integer;
+  LastQuote: Integer;
+begin
+  Result := False;
+  KeyPosition := Pos(#34 + Key + #34, Line);
+  if KeyPosition = 0 then
+    Exit;
+
+  Remainder := Copy(Line, KeyPosition + Length(Key) + 2, MaxInt);
+  FirstQuote := Pos(#34, Remainder);
+  if FirstQuote = 0 then
+    Exit;
+
+  Remainder := Copy(Remainder, FirstQuote + 1, MaxInt);
+  LastQuote := Pos(#34, Remainder);
+  if LastQuote = 0 then
+    Exit;
+
+  Value := Copy(Remainder, 1, LastQuote - 1);
+  StringChangeEx(Value, '\\', '\', True);
+  Result := True;
+end;
+
+function FindSteamObsInLibrary(const LibraryDir: String; var ObsDir: String): Boolean;
+var
+  ManifestPath: String;
+  Manifest: TArrayOfString;
+  I: Integer;
+  InstallDir: String;
+begin
+  Result := False;
+  ManifestPath := AddBackslash(LibraryDir) + 'steamapps\appmanifest_' + SteamObsAppId + '.acf';
+  if not LoadStringsFromFile(ManifestPath, Manifest) then
+    Exit;
+
+  for I := 0 to GetArrayLength(Manifest) - 1 do
+  begin
+    if GetQuotedVdfValue(Manifest[I], 'installdir', InstallDir) then
+    begin
+      ObsDir := AddBackslash(LibraryDir) + 'steamapps\common\' + InstallDir;
+      Result := IsObsStudioDir(ObsDir);
+      Exit;
+    end;
+  end;
+end;
+
+function GetSteamObsStudioDir(var ObsDir: String): Boolean;
+var
+  SteamDir: String;
+  LibrariesPath: String;
+  Libraries: TArrayOfString;
+  I: Integer;
+  LibraryDir: String;
+begin
+  Result := False;
+  if not RegQueryStringValue(HKCU, 'Software\Valve\Steam', 'SteamPath', SteamDir) then
+    Exit;
+
+  if FindSteamObsInLibrary(SteamDir, ObsDir) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  LibrariesPath := AddBackslash(SteamDir) + 'steamapps\libraryfolders.vdf';
+  if not LoadStringsFromFile(LibrariesPath, Libraries) then
+    Exit;
+
+  for I := 0 to GetArrayLength(Libraries) - 1 do
+  begin
+    if GetQuotedVdfValue(Libraries[I], 'path', LibraryDir) and
+       FindSteamObsInLibrary(LibraryDir, ObsDir) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 function GetObsStudioDir(Param: String): String;
 var
   UninstallString: String;
@@ -51,8 +142,12 @@ begin
     Exit;
   end;
 
+  if GetSteamObsStudioDir(Result) then
+    Exit;
+
   Result := ExpandConstant('{autopf}\obs-studio');
 end;
+
 
 
 
