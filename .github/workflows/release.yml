@@ -91,7 +91,7 @@ jobs:
           .\scripts\package-windows.ps1
 
       - name: Upload release packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: obs-lan-preview-${{ env.RELEASE_TAG }}-windows-x64
           path: release/packages/*.zip
