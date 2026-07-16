@@ -63,7 +63,7 @@ jobs:
 
       - name: Restore OBS development cache
         id: obs-dev-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             C:\obs-dev\obs-prefix
